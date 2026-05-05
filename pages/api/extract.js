@@ -1,5 +1,5 @@
 async function callAnthropic(payload, retries = 4) {
-  const delays = [2000, 4000, 8000, 15000]; // esperas entre reintentos
+  const delays = [2000, 4000, 8000, 15000];
  
   for (let attempt = 0; attempt <= retries; attempt++) {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
@@ -13,7 +13,6 @@ async function callAnthropic(payload, retries = 4) {
       body: JSON.stringify(payload),
     });
  
-    // Si es rate limit (429) y quedan reintentos, esperar y volver a intentar
     if (response.status === 429 && attempt < retries) {
       await new Promise(r => setTimeout(r, delays[attempt]));
       continue;
@@ -37,7 +36,21 @@ export default async function handler(req, res) {
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: fileData } }
     : { type: 'image', source: { type: 'base64', media_type: mimeType, data: fileData } };
  
-  const prompt = 'Eres experto en documentos tributarios chilenos. Extrae los campos y responde SOLO con JSON valido sin markdown ni texto adicional: {"tipo_documento":"string","numero_folio":"string","rut_emisor":"string","razon_social_emisor":"string","rut_deudor":"string","razon_social_deudor":"string","fecha_emision":"DD/MM/YYYY","monto_neto":0,"iva":0,"total":0,"confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}} Montos como enteros sin puntos. Campos no visibles = null.';
+  const prompt = `Eres experto en documentos tributarios y comerciales chilenos. Analiza el documento y extrae los campos indicados.
+ 
+REGLAS PARA IDENTIFICAR EMISOR Y DEUDOR:
+- EMISOR: quien EMITE o GENERA el documento (el que cobra o presta el servicio). Busca "Razón Social", "Proveedor", "Contratista", o el RUT en el encabezado del documento.
+- DEUDOR: quien RECIBE el documento y debe pagar (el cliente o mandante). Busca "Cliente", "Mandante", "Razón Social del receptor", o el RUT destinatario.
+- En Estados de Pago (EPA): el EMISOR es el contratista/proveedor, el DEUDOR es el mandante/cliente.
+- En Facturas Electrónicas: el EMISOR es quien factura, el DEUDOR es el receptor de la factura.
+- En Notas de Débito: el EMISOR es quien emite la nota, el DEUDOR es el receptor.
+- En Boletas: el EMISOR es el comercio, el DEUDOR puede ser null si no está identificado.
+- NUNCA intercambies emisor y deudor. Si hay duda, marca confianza como "baja".
+ 
+Responde SOLO con JSON valido sin markdown ni texto adicional:
+{"tipo_documento":"string","numero_folio":"string","rut_emisor":"string","razon_social_emisor":"string","rut_deudor":"string","razon_social_deudor":"string","fecha_emision":"DD/MM/YYYY","monto_neto":0,"iva":0,"total":0,"confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
+ 
+Montos como enteros sin puntos ni decimales. Campos no visibles = null.`;
  
   try {
     const response = await callAnthropic({
