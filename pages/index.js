@@ -73,7 +73,7 @@ export default function Home() {
       }
  
       // Pausa entre facturas para no saturar el rate limit de Anthropic
-      if (i < files.length - 1) await sleep(1500);
+      if (i < files.length - 1) await sleep(2500);
     }
     setResults(allResults);
     setProcessing(false);
