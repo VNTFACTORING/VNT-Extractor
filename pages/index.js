@@ -10,6 +10,10 @@ export default function Home() {
   const [over, setOver] = useState(false);
   const inputRef = useRef();
  
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+ 
   function addFiles(newFiles) {
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
@@ -67,6 +71,9 @@ export default function Home() {
         allResults.push({ ok: false, error: e.message, filename: files[i].name });
         setStatuses(prev => ({ ...prev, [i]: 'error' }));
       }
+ 
+      // Pausa entre facturas para no saturar el rate limit de Anthropic
+      if (i < files.length - 1) await sleep(1500);
     }
     setResults(allResults);
     setProcessing(false);
@@ -87,7 +94,8 @@ export default function Home() {
       return [r.filename, d.tipo_documento||'', d.numero_folio||'', d.rut_emisor||'', d.razon_social_emisor||'', d.rut_deudor||'', d.razon_social_deudor||'', d.fecha_emision||'', d.monto_neto||'', d.iva||'', d.total||''];
     });
     navigator.clipboard.writeText([hdr, ...rows].map(r => r.join('\t')).join('\n'))
-      .then(() => alert('Copiado — pega en Excel o GVE'));
+      .then(() => alert('✓ Copiado — pega en Excel o GVE'))
+      .catch(() => alert('No se pudo copiar automáticamente. Selecciona la tabla y cópiala manualmente.'));
   }
  
   const okResults = results.filter(r => r.ok);
@@ -165,6 +173,7 @@ export default function Home() {
         .money { font-weight: 600; color: #1F8A94; }
         .total-m { font-weight: 700; color: #1A2B3C; }
         .err-row { color: #C00000; font-family: 'DM Sans', sans-serif; font-size: 12px; }
+        .conf-baja { color: #C00000; font-weight: 700; }
         .footer { text-align: center; padding: 2rem 0 1rem; font-size: 11px; color: #6B7A8D; }
         .footer a { color: #2AADB8; text-decoration: none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} }
@@ -269,9 +278,9 @@ export default function Home() {
                       <td className="nm">{r.filename.length>22?r.filename.slice(0,20)+'…':r.filename}</td>
                       <td>{fmt(r.data.tipo_documento)}</td>
                       <td style={{fontWeight:600}}>{fmt(r.data.numero_folio)}</td>
-                      <td>{fmt(r.data.rut_emisor)}</td>
+                      <td className={r.data.confianza?.rut_emisor === 'baja' ? 'conf-baja' : ''}>{fmt(r.data.rut_emisor)}</td>
                       <td>{fmt(r.data.razon_social_emisor)}</td>
-                      <td>{fmt(r.data.rut_deudor)}</td>
+                      <td className={r.data.confianza?.rut_deudor === 'baja' ? 'conf-baja' : ''}>{fmt(r.data.rut_deudor)}</td>
                       <td>{fmt(r.data.razon_social_deudor)}</td>
                       <td>{fmt(r.data.fecha_emision)}</td>
                       <td className="money">{fmt(r.data.monto_neto, true)}</td>
