@@ -441,9 +441,23 @@ export default function Home() {
                               Consultando MP…
                             </div>
                           )}
-                          {mp?.error && <span className="mp-err">Error: {mp.error}</span>}
+                          {mp?.error && (
+                            <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                              <span className="mp-err">Error: {mp.error}</span>
+                              <button className="btn-mp" onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
+                            </div>
+                          )}
+                          {!mp && !processingMP && (
+                            <button className="btn-mp" onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔍 Buscar</button>
+                          )}
                           {mp?.data && !mp.loading && (
                             <div>
+                              {!mp.data.licitacion && !mp.data.org && (
+                                <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                                  <span className="mp-none">No encontrado en MP</span>
+                                  <button className="btn-mp" onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
+                                </div>
+                              )}
                               {lit ? (
                                 <>
                                   <div className="mp-org">{lit.organismo || mp.data.org?.nombre || '—'}</div>
@@ -471,9 +485,7 @@ export default function Home() {
                                   <div className="mp-org">{mp.data.org.nombre}</div>
                                   <div className="mp-none">Sin licitación con responsable</div>
                                 </>
-                              ) : (
-                                <div className="mp-none">No encontrado en MP</div>
-                              )}
+                              ) : null}
                             </div>
                           )}
                         </td>
