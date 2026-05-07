@@ -44,27 +44,35 @@ REGLAS PARA IDENTIFICAR EMISOR Y DEUDOR:
 - En Estados de Pago (EPA): el EMISOR es el contratista/proveedor, el DEUDOR es el mandante/cliente.
 - En Facturas Electrónicas: el EMISOR es quien factura, el DEUDOR es el receptor de la factura.
 - En Notas de Débito/Crédito: el EMISOR es quien emite la nota, el DEUDOR es el receptor.
-- En Boletas: el EMISOR es el comercio, el DEUDOR puede ser null si no está identificado.
 - NUNCA intercambies emisor y deudor. Si hay duda, marca confianza como "baja".
  
 FORMATO DE RUT — MUY IMPORTANTE:
 - Siempre sin puntos, con guión y dígito verificador.
-- Formato correcto: XXXXXXXX-X (ejemplos: 76416753-8, 71918300-K, 9123456-7)
-- Si el RUT en el documento tiene puntos (ej: 76.416.753-8), elimínalos: 76416753-8
+- Formato correcto: XXXXXXXX-X (ejemplos: 76416753-8, 71918300-K)
+- Si el RUT tiene puntos (ej: 76.416.753-8), elimínalos: 76416753-8
 - El dígito verificador puede ser número o letra K (siempre mayúscula)
  
-CAMPO REFERENCIA:
-- Extrae el número o código de referencia del documento si existe (orden de compra, contrato, código interno, número de pedido, etc.)
-- Si hay múltiples referencias, sepáralas con " | "
-- Si no hay referencia, usa null
- 
-CAMPO FECHA DE VENCIMIENTO:
-- Busca explícitamente la fecha de vencimiento o fecha de pago del documento
-- Si no existe, usa la fecha de emisión como fallback
+FECHA DE VENCIMIENTO:
+- Busca explícitamente la fecha de vencimiento o fecha de pago del documento.
+- Si no existe, usa la fecha de emisión como fallback.
 - Formato: DD/MM/YYYY
  
+REFERENCIAS — Extrae SOLO el valor numérico o alfanumérico, SIN el texto del label:
+ 
+1. ref_oc: Busca campos que contengan "Orden de Compra", "Orden Compra" u "OC".
+   - Extrae SOLO el número/código. Ejemplo: "Orden Compra N° 5139-99-SE26" → "5139-99-SE26"
+   - Si no existe → null
+ 
+2. ref_presupuesto: Busca campos que contengan "Presupuesto".
+   - Extrae SOLO el número. Ejemplo: "Presupuesto N°11576" → "11576"
+   - Si no existe → null
+ 
+3. ref_edp: Busca campos que contengan "Estado de Pago", "EDP", o cualquier folio de referencia secundario distinto al folio principal del documento.
+   - Extrae SOLO el número o identificador. Ejemplo: "EP - Estado de Pago 6" → "6"
+   - Si no existe → null
+ 
 Responde SOLO con JSON valido sin markdown ni texto adicional:
-{"tipo_documento":"string","numero_folio":"string","rut_emisor":"XXXXXXXX-X","razon_social_emisor":"string","rut_deudor":"XXXXXXXX-X","razon_social_deudor":"string","fecha_emision":"DD/MM/YYYY","fecha_vencimiento":"DD/MM/YYYY","monto_neto":0,"iva":0,"total":0,"referencia":"string","confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
+{"tipo_documento":"string","numero_folio":"string","rut_emisor":"XXXXXXXX-X","razon_social_emisor":"string","rut_deudor":"XXXXXXXX-X","razon_social_deudor":"string","fecha_emision":"DD/MM/YYYY","fecha_vencimiento":"DD/MM/YYYY","monto_neto":0,"iva":0,"total":0,"ref_oc":"string","ref_presupuesto":"string","ref_edp":"string","confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
  
 Montos como enteros sin puntos ni decimales. Campos no visibles = null.`;
  
