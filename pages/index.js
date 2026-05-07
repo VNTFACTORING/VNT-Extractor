@@ -5,10 +5,12 @@ export default function Home() {
   const [files, setFiles] = useState([]);
   const [results, setResults] = useState([]);
   const [processing, setProcessing] = useState(false);
+  const [processingMP, setProcessingMP] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [progressMP, setProgressMP] = useState({ current: 0, total: 0 });
   const [statuses, setStatuses] = useState({});
+  const [mpData, setMpData] = useState({});
   const [over, setOver] = useState(false);
-  const [mpData, setMpData] = useState({});   // { rowIndex: { loading, data, error } }
   const inputRef = useRef();
  
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -23,8 +25,7 @@ export default function Home() {
   function addFiles(newFiles) {
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
-      const filtered = [...newFiles].filter(f => !existing.has(f.name + f.size));
-      return [...prev, ...filtered];
+      return [...prev, ...[...newFiles].filter(f => !existing.has(f.name + f.size))];
     });
     setResults([]); setStatuses({}); setMpData({});
   }
@@ -33,7 +34,9 @@ export default function Home() {
  
   function clearAll() {
     setFiles([]); setResults([]); setStatuses({});
-    setProgress({ current: 0, total: 0 }); setMpData({});
+    setProgress({ current: 0, total: 0 });
+    setProgressMP({ current: 0, total: 0 });
+    setMpData({});
   }
  
   async function toB64(file) {
@@ -45,9 +48,58 @@ export default function Home() {
     });
   }
  
+  // Consulta MP para una factura individual
+  async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp) {
+    try {
+      const res = await fetch('/api/mercadopublico', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp })
+      });
+      const data = await res.json();
+      setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, data } }));
+    } catch (e) {
+      setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, error: e.message } }));
+    }
+  }
+ 
+  // Consulta MP para TODAS las facturas extraídas automáticamente
+  async function consultarMPTodas(allResults) {
+    const okRows = allResults.map((r, i) => ({ r, i })).filter(({ r }) => r.ok);
+    if (!okRows.length) return;
+ 
+    setProcessingMP(true);
+    setProgressMP({ current: 0, total: okRows.length });
+ 
+    // Marcar todas como loading
+    const loadingState = {};
+    okRows.forEach(({ i }) => { loadingState[i] = { loading: true }; });
+    setMpData(loadingState);
+ 
+    for (let idx = 0; idx < okRows.length; idx++) {
+      const { r, i } = okRows[idx];
+      setProgressMP({ current: idx + 1, total: okRows.length });
+ 
+      await consultarMP(
+        i,
+        r.data.rut_deudor,
+        r.data.razon_social_deudor,
+        r.data.ref_oc,
+        r.data.ref_presupuesto,
+        r.data.ref_edp
+      );
+ 
+      // Pausa entre consultas MP para no sobrecargar el servidor
+      if (idx < okRows.length - 1) await sleep(1200);
+    }
+ 
+    setProcessingMP(false);
+  }
+ 
   async function extract() {
     if (!files.length || processing) return;
-    setProcessing(true); setResults([]); setMpData({});
+    setProcessing(true);
+    setResults([]); setMpData({});
     const ns = {}; files.forEach((_, i) => { ns[i] = 'queue'; }); setStatuses({ ...ns });
  
     const allResults = [];
@@ -73,23 +125,12 @@ export default function Home() {
       }
       if (i < files.length - 1) await sleep(2500);
     }
+ 
     setResults(allResults);
     setProcessing(false);
-  }
  
-  async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc) {
-    setMpData(prev => ({ ...prev, [rowIndex]: { loading: true } }));
-    try {
-      const res = await fetch('/api/mercadopublico', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rut_deudor, razon_social_deudor, ref_oc })
-      });
-      const data = await res.json();
-      setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, data } }));
-    } catch (e) {
-      setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, error: e.message } }));
-    }
+    // ── Automáticamente consultar MP para todas las facturas OK ──
+    await consultarMPTodas(allResults);
   }
  
   function fmt(v, money) {
@@ -120,7 +161,7 @@ export default function Home() {
   function exportCompleto() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
-    const hdr = ['Archivo','Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Neto','IVA','Total','N° OC','N° Presupuesto','N° EDP','Org MP','Cód MP','Responsable MP','Email MP','Teléfono MP'];
+    const hdr = ['Archivo','Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Neto','IVA','Total','N° OC','N° Presupuesto','N° EDP','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
     const rows = ok.map((r, i) => {
       const d = r.data;
       const mp = mpData[i]?.data;
@@ -131,18 +172,28 @@ export default function Home() {
         d.fecha_emision||'', d.fecha_vencimiento||'',
         d.monto_neto||'', d.iva||'', d.total||'',
         d.ref_oc||'', d.ref_presupuesto||'', d.ref_edp||'',
-        mp?.org?.nombre||'', mp?.org?.codigo||'',
-        mp?.oc?.responsable_nombre||'', mp?.oc?.responsable_email||'', mp?.oc?.responsable_fono||'',
+        mp?.licitacion?.organismo||mp?.org?.nombre||'',
+        mp?.licitacion?.codigo||'',
+        mp?.licitacion?.responsable_pago||'',
+        mp?.licitacion?.email_pago||'',
+        mp?.licitacion?.responsable_contrato||'',
+        mp?.licitacion?.email_contrato||'',
+        mp?.licitacion?.fono_contrato||'',
+        mp?.licitacion?.ejecutivo_compras||'',
+        mp?.licitacion?.unidad||'',
       ];
     });
     navigator.clipboard.writeText([hdr,...rows].map(r=>r.join('\t')).join('\n'))
       .then(()=>alert('✓ Copiado completo'))
-      .catch(()=>alert('No se pudo copiar automáticamente.'));
+      .catch(()=>alert('No se pudo copiar.'));
   }
  
   const okResults = results.filter(r => r.ok);
   const totalNeto = okResults.reduce((s, r) => s + (r.data.monto_neto || 0), 0);
   const totalFinal = okResults.reduce((s, r) => s + (r.data.total || 0), 0);
+  const mpDone = Object.values(mpData).filter(m => !m.loading).length;
+  const mpTotal = Object.keys(mpData).length;
+ 
   const statusLabel = { queue:'En cola', processing:'Procesando…', done:'✓ Listo', error:'Error' };
   const statusColor = { queue:'#6B7A8D', processing:'#1A6AB5', done:'#0A7055', error:'#C00000' };
   const statusBg   = { queue:'#F2F4F7', processing:'#E8F4FF', done:'#E1F5EE', error:'#FFF0F0' };
@@ -164,7 +215,7 @@ export default function Home() {
         .brand span { color:#2AADB8; }
         .sep { color:rgba(255,255,255,.2); margin:0 10px; }
         .tool { font-size:13px; color:rgba(255,255,255,.45); }
-        .page { max-width:1200px; margin:0 auto; padding:2rem 1.5rem 4rem; }
+        .page { max-width:1300px; margin:0 auto; padding:2rem 1.5rem 4rem; }
         .drop { background:#fff; border-radius:14px; border:2px dashed #DDE2EA; padding:2.5rem 2rem; text-align:center; cursor:pointer; transition:all .15s; margin-bottom:1rem; }
         .drop.over,.drop:hover { border-color:#2AADB8; background:#E6F7F9; }
         .drop.has { border-style:solid; border-color:#2AADB8; background:#E6F7F9; }
@@ -189,10 +240,15 @@ export default function Home() {
         .btn-main:disabled { opacity:.45; cursor:not-allowed; }
         .btn-sec { padding:12px 18px; background:#fff; color:#6B7A8D; font-size:13px; font-weight:500; font-family:'DM Sans',sans-serif; border:1px solid #DDE2EA; border-radius:10px; cursor:pointer; }
         .btn-sec:hover { background:#F2F4F7; }
-        .prog { margin-bottom:1.25rem; }
-        .prog-label { font-size:12px; color:#6B7A8D; margin-bottom:6px; }
-        .prog-bar { height:6px; background:#DDE2EA; border-radius:6px; overflow:hidden; }
-        .prog-fill { height:100%; background:#2AADB8; border-radius:6px; transition:width .4s ease; }
+        .prog { margin-bottom:.75rem; }
+        .prog-label { font-size:12px; color:#6B7A8D; margin-bottom:6px; display:flex; align-items:center; gap:8px; }
+        .prog-label .badge { font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; }
+        .badge-extract { background:#E8F4FF; color:#1A6AB5; }
+        .badge-mp { background:#F0EEFF; color:#5B2ED8; }
+        .prog-bar { height:6px; background:#DDE2EA; border-radius:6px; overflow:hidden; margin-bottom:.5rem; }
+        .prog-fill { height:100%; border-radius:6px; transition:width .4s ease; }
+        .prog-fill.extract { background:#2AADB8; }
+        .prog-fill.mp { background:#7C3AED; }
         .summary { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:1rem; }
         .sc { background:#fff; border:1px solid #DDE2EA; border-radius:10px; padding:14px 16px; }
         .sl { font-size:10px; font-weight:700; color:#6B7A8D; text-transform:uppercase; letter-spacing:.07em; margin-bottom:5px; }
@@ -206,7 +262,7 @@ export default function Home() {
         .btn-exp-full { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#fff; color:#1A2B3C; font-size:13px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #DDE2EA; border-radius:8px; cursor:pointer; }
         .btn-exp-full:hover { background:#F2F4F7; }
         .tbl-wrap { background:#fff; border:1px solid #DDE2EA; border-radius:14px; overflow:auto; }
-        table { width:100%; border-collapse:collapse; min-width:1300px; }
+        table { width:100%; border-collapse:collapse; min-width:1400px; }
         thead th { padding:10px 14px; text-align:left; font-size:10px; font-weight:700; color:#6B7A8D; text-transform:uppercase; letter-spacing:.07em; background:#F2F4F7; border-bottom:1px solid #DDE2EA; white-space:nowrap; }
         thead th.gve { background:#E6F7F9; color:#1F8A94; }
         thead th.ref { background:#FFF8E6; color:#A67700; }
@@ -222,15 +278,19 @@ export default function Home() {
         .conf-baja { color:#C00000; font-weight:700; }
         .ref-val { font-weight:600; color:#A67700; }
         .empty-ref { color:#DDE2EA; }
-        .btn-mp { display:inline-flex; align-items:center; gap:5px; padding:5px 11px; background:#F0EEFF; color:#5B2ED8; font-size:11px; font-weight:700; font-family:'DM Sans',sans-serif; border:1px solid #C4B5FD; border-radius:6px; cursor:pointer; white-space:nowrap; }
-        .btn-mp:hover { background:#E5DCFF; }
-        .btn-mp:disabled { opacity:.5; cursor:not-allowed; }
-        .mp-cell { min-width:200px; }
-        .mp-org { font-family:'DM Sans',sans-serif; font-size:12px; font-weight:600; color:#5B2ED8; }
-        .mp-sub { font-family:'DM Sans',sans-serif; font-size:11px; color:#6B7A8D; margin-top:2px; }
-        .mp-resp { font-family:'DM Sans',sans-serif; font-size:12px; font-weight:600; color:#1A2B3C; margin-top:6px; }
-        .mp-email { font-family:'DM Mono',monospace; font-size:11px; color:#1A6AB5; margin-top:2px; }
-        .mp-err { font-family:'DM Sans',sans-serif; font-size:11px; color:#C00000; }
+        .mp-cell { min-width:220px; font-family:'DM Sans',sans-serif; }
+        .mp-loading { font-size:11px; color:#7C3AED; display:flex; align-items:center; gap:6px; }
+        .mp-spinner { width:12px; height:12px; border:2px solid #DDD; border-top-color:#7C3AED; border-radius:50%; animation:spin .7s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .mp-org { font-size:12px; font-weight:600; color:#5B2ED8; }
+        .mp-licit { font-size:10px; color:#7C3AED; margin-top:1px; font-family:'DM Mono',monospace; }
+        .mp-resp { font-size:12px; font-weight:600; color:#1A2B3C; margin-top:5px; }
+        .mp-cargo { font-size:11px; color:#6B7A8D; }
+        .mp-email { font-size:11px; color:#1A6AB5; font-family:'DM Mono',monospace; }
+        .mp-fono { font-size:11px; color:#6B7A8D; }
+        .mp-none { font-size:11px; color:#DDE2EA; }
+        .mp-nota { font-size:10px; color:#A67700; margin-top:3px; font-style:italic; }
+        .mp-err { font-size:11px; color:#C00000; }
         .footer { text-align:center; padding:2rem 0 1rem; font-size:11px; color:#6B7A8D; }
         .footer a { color:#2AADB8; text-decoration:none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} }
@@ -274,7 +334,7 @@ export default function Home() {
                 <span className="qi-st" style={{background:statusBg[statuses[i]||'queue'], color:statusColor[statuses[i]||'queue']}}>
                   {statusLabel[statuses[i]||'queue']}
                 </span>
-                {!processing && <button className="qi-rm" onClick={() => removeFile(i)}>×</button>}
+                {!processing && !processingMP && <button className="qi-rm" onClick={() => removeFile(i)}>×</button>}
               </div>
             ))}
           </div>
@@ -282,17 +342,43 @@ export default function Home() {
  
         {files.length > 0 && (
           <div className="actions">
-            <button className="btn-main" onClick={extract} disabled={processing}>
-              {processing ? `Procesando ${progress.current} de ${progress.total}…` : '⬇ Extraer datos'}
+            <button className="btn-main" onClick={extract} disabled={processing || processingMP}>
+              {processing
+                ? `Extrayendo ${progress.current} de ${progress.total}…`
+                : processingMP
+                  ? `Consultando Mercado Público ${progressMP.current} de ${progressMP.total}…`
+                  : '⬇ Extraer datos'}
             </button>
-            {!processing && <button className="btn-sec" onClick={clearAll}>Limpiar</button>}
+            {!processing && !processingMP && <button className="btn-sec" onClick={clearAll}>Limpiar</button>}
           </div>
         )}
  
+        {/* Barra extracción */}
         {processing && (
           <div className="prog">
-            <div className="prog-label">Procesando {progress.current} de {progress.total}…</div>
-            <div className="prog-bar"><div className="prog-fill" style={{width:`${(progress.current/progress.total)*100}%`}}/></div>
+            <div className="prog-label">
+              <span className="badge badge-extract">EXTRACCIÓN</span>
+              Procesando factura {progress.current} de {progress.total}
+            </div>
+            <div className="prog-bar"><div className="prog-fill extract" style={{width:`${(progress.current/progress.total)*100}%`}}/></div>
+          </div>
+        )}
+ 
+        {/* Barra Mercado Público */}
+        {processingMP && (
+          <div className="prog">
+            <div className="prog-label">
+              <span className="badge badge-mp">MERCADO PÚBLICO</span>
+              Consultando responsables {progressMP.current} de {progressMP.total}
+            </div>
+            <div className="prog-bar"><div className="prog-fill mp" style={{width:`${(progressMP.current/progressMP.total)*100}%`}}/></div>
+          </div>
+        )}
+ 
+        {/* Estado MP completado */}
+        {!processingMP && mpTotal > 0 && !processing && (
+          <div style={{fontSize:12, color:'#5B2ED8', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
+            ✓ Mercado Público: {mpDone}/{mpTotal} consultadas
           </div>
         )}
  
@@ -310,7 +396,7 @@ export default function Home() {
               {okResults.length > 0 && (
                 <div className="export-btns">
                   <button className="btn-exp-gve" onClick={exportGVE}>⬇ Exportar GVE (Carga Masiva)</button>
-                  <button className="btn-exp-full" onClick={exportCompleto}>⬇ Exportar completo</button>
+                  <button className="btn-exp-full" onClick={exportCompleto}>⬇ Exportar completo + MP</button>
                 </div>
               )}
             </div>
@@ -330,6 +416,7 @@ export default function Home() {
                 <tbody>
                   {results.map((r, i) => {
                     const mp = mpData[i];
+                    const lit = mp?.data?.licitacion;
                     return r.ok ? (
                       <tr key={i}>
                         <td className="nm">{r.filename.length>22?r.filename.slice(0,20)+'…':r.filename}</td>
@@ -348,31 +435,44 @@ export default function Home() {
                         <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>{r.data.ref_presupuesto||'—'}</td>
                         <td className={r.data.ref_edp?'ref-val':'empty-ref'}>{r.data.ref_edp||'—'}</td>
                         <td className="mp-cell">
-                          {!mp && (
-                            <button className="btn-mp"
-                              onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc)}>
-                              🔍 Consultar MP
-                            </button>
+                          {mp?.loading && (
+                            <div className="mp-loading">
+                              <div className="mp-spinner"/>
+                              Consultando MP…
+                            </div>
                           )}
-                          {mp?.loading && <span style={{fontSize:11,color:'#5B2ED8'}}>Consultando…</span>}
                           {mp?.error && <span className="mp-err">Error: {mp.error}</span>}
-                          {mp?.data && (
+                          {mp?.data && !mp.loading && (
                             <div>
-                              {mp.data.org ? (
+                              {lit ? (
+                                <>
+                                  <div className="mp-org">{lit.organismo || mp.data.org?.nombre || '—'}</div>
+                                  <div className="mp-licit">📋 {lit.codigo} · {lit.unidad}</div>
+                                  {lit.responsable_pago && (
+                                    <>
+                                      <div className="mp-resp">💰 {lit.responsable_pago}</div>
+                                      {lit.email_pago && <div className="mp-email">{lit.email_pago}</div>}
+                                    </>
+                                  )}
+                                  {lit.responsable_contrato && (
+                                    <>
+                                      <div className="mp-resp" style={{marginTop:3}}>📝 {lit.responsable_contrato}</div>
+                                      {lit.email_contrato && <div className="mp-email">{lit.email_contrato}</div>}
+                                      {lit.fono_contrato && <div className="mp-fono">📞 {lit.fono_contrato}</div>}
+                                    </>
+                                  )}
+                                  {lit.ejecutivo_compras && (
+                                    <div className="mp-cargo" style={{marginTop:3}}>🛒 {lit.ejecutivo_compras}</div>
+                                  )}
+                                  {lit.nota && <div className="mp-nota">⚠️ {lit.nota}</div>}
+                                </>
+                              ) : mp.data.org ? (
                                 <>
                                   <div className="mp-org">{mp.data.org.nombre}</div>
-                                  <div className="mp-sub">Cód: {mp.data.org.codigo} · {mp.data.org.fuente}</div>
+                                  <div className="mp-none">Sin licitación con responsable</div>
                                 </>
-                              ) : <div className="mp-sub">Organismo no encontrado en MP</div>}
-                              {mp.data.oc?.responsable_nombre && (
-                                <>
-                                  <div className="mp-resp">👤 {mp.data.oc.responsable_nombre}</div>
-                                  {mp.data.oc.responsable_email && <div className="mp-email">{mp.data.oc.responsable_email}</div>}
-                                  {mp.data.oc.responsable_fono && <div className="mp-sub">📞 {mp.data.oc.responsable_fono}</div>}
-                                </>
-                              )}
-                              {mp.data.oc?.comprador_unidad && !mp.data.oc?.responsable_nombre && (
-                                <div className="mp-sub">Unidad: {mp.data.oc.comprador_unidad}</div>
+                              ) : (
+                                <div className="mp-none">No encontrado en MP</div>
                               )}
                             </div>
                           )}
