@@ -3,7 +3,9 @@ const BASE = 'https://api.mercadopublico.cl/servicios/v1/Publico';
  
 async function get(url) {
   try {
-    const r = await fetch(url);
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 6000);
+    const r = await fetch(url, { signal: ctrl.signal });
     if (!r.ok) return null;
     return await r.json();
   } catch {
@@ -11,40 +13,103 @@ async function get(url) {
   }
 }
  
-async function getLicit(codigo) {
-  const d = await get(`${BASE}/Licitaciones.aspx?ticket=${TICKET}&codigo=${encodeURIComponent(codigo)}`);
-  const l = d?.Listado?.[0];
-  if (!l) return null;
+async function fetchHtml(url) {
+  try {
+    const ctrl = new AbortController();
+    setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+    });
+    if (!r.ok) return null;
+    return await r.text();
+  } catch {
+    return null;
+  }
+}
+ 
+// Extrae emails y telefono desde el HTML de la ficha de licitacion
+function extractContactsFromHtml(html) {
+  if (!html) return {};
+  function val(id) {
+    var m = html.match(new RegExp(id + '[^>]*>([^<]+)'));
+    var v = m ? m[1].trim() : null;
+    return (v && v !== '&nbsp;' && v.length > 0) ? v : null;
+  }
   return {
-    codigo:        l.CodigoExterno,
-    nombre:        l.Nombre,
-    organismo:     l.Comprador?.NombreOrganismo || null,
-    unidad:        l.Comprador?.NombreUnidad    || null,
-    ejecutivo_compras:     (l.Comprador?.NombreUsuario  || '').trim() || null,
-    responsable_pago:     (l.NombreResponsablePago     || '').trim() || null,
-    email_pago:    (l.EmailResponsablePago      || '').trim() || null,
-    responsable_contrato: (l.NombreResponsableContrato || '').trim() || null,
-    email_contrato:(l.EmailResponsableContrato  || '').trim() || null,
-    fono_contrato:          (l.FonoResponsableContrato   || '').trim() || null,
+    responsable_pago:     val('lblFicha7NombreResponsablePago'),
+    email_pago:           val('lblFicha7EmailResponsablePago'),
+    responsable_contrato: val('lblFicha7NombreResponsableContrato'),
+    email_contrato:       val('lblFicha7EmailResponsableContrato'),
+    fono_contrato:        val('lblFicha7TelefonoResponsableContrato'),
   };
 }
  
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function getLicit(codigo) {
+  var d = await get(BASE + '/Licitaciones.aspx?ticket=' + TICKET + '&codigo=' + encodeURIComponent(codigo));
+  var l = d && d.Listado && d.Listado[0];
+  if (!l) return null;
+ 
+  var result = {
+    codigo:               l.CodigoExterno,
+    nombre:               l.Nombre,
+    organismo:            l.Comprador ? l.Comprador.NombreOrganismo : null,
+    rut_organismo:        l.Comprador ? l.Comprador.RutUnidad : null,
+    unidad:               l.Comprador ? l.Comprador.NombreUnidad : null,
+    ejecutivo_compras:    l.Comprador && l.Comprador.NombreUsuario ? l.Comprador.NombreUsuario.trim() : null,
+    responsable_pago:     l.NombreResponsablePago ? l.NombreResponsablePago.trim() : null,
+    email_pago:           l.EmailResponsablePago ? l.EmailResponsablePago.trim() : null,
+    responsable_contrato: l.NombreResponsableContrato ? l.NombreResponsableContrato.trim() : null,
+    email_contrato:       l.EmailResponsableContrato ? l.EmailResponsableContrato.trim() : null,
+    fono_contrato:        l.FonoResponsableContrato ? l.FonoResponsableContrato.trim() : null,
+  };
+ 
+  // Si faltan emails/fono, intentar obtenerlos desde la ficha web via UrlActa
+  var needsWeb = !result.email_pago && !result.email_contrato && !result.fono_contrato;
+  var urlActa = l.Adjudicacion && l.Adjudicacion.UrlActa ? l.Adjudicacion.UrlActa : null;
+ 
+  if (needsWeb && urlActa) {
+    // El token del UrlActa funciona para acceder a DetailsAcquisition con datos completos
+    var fichaUrl = urlActa.replace(
+      'StepsProcessAward/PreviewAwardAct.aspx',
+      'DetailsAcquisition.aspx'
+    );
+    var html = await fetchHtml(fichaUrl);
+    if (html && html.length > 200000) {
+      var web = extractContactsFromHtml(html);
+      if (web.email_pago)           result.email_pago           = web.email_pago;
+      if (web.email_contrato)       result.email_contrato       = web.email_contrato;
+      if (web.fono_contrato)        result.fono_contrato        = web.fono_contrato;
+      if (web.responsable_pago && !result.responsable_pago)
+                                    result.responsable_pago     = web.responsable_pago;
+      if (web.responsable_contrato && !result.responsable_contrato)
+                                    result.responsable_contrato = web.responsable_contrato;
+    }
+  }
+ 
+  return result;
+}
+ 
+var sleep = function(ms) { return new Promise(function(r) { setTimeout(r, ms); }); };
  
 async function buscarDesdeOC(ref) {
-  const prefijo = ref.split('-')[0];
-  const anio = (ref.match(/(\d{2})$/) || [])[1];
+  var prefijo = ref.split('-')[0];
+  var m = ref.match(/(\d{2})$/);
+  var anio = m ? m[1] : null;
   if (!prefijo || !anio) return null;
-  const sufijos = ['LE', 'LP', 'CO', 'O1'];
+ 
+  var sufijos = ['LE', 'LP', 'CO', 'O1'];
+  var fallback = null;
+ 
   for (var si = 0; si < sufijos.length; si++) {
     for (var n = 1; n <= 5; n++) {
       await sleep(300);
-      const d = await getLicit(prefijo + '-' + n + '-' + sufijos[si] + anio);
+      var d = await getLicit(prefijo + '-' + n + '-' + sufijos[si] + anio);
       if (d && d.responsable_pago) return d;
-      if (d && d.organismo) return d;
+      if (d && d.organismo && !fallback) fallback = d;
     }
   }
-  return null;
+  return fallback;
 }
  
 export default async function handler(req, res) {
@@ -57,8 +122,8 @@ export default async function handler(req, res) {
     }
  
     var body = req.body || {};
-    var rut_deudor = body.rut_deudor;
     var razon_social_deudor = body.razon_social_deudor;
+    var rut_deudor = body.rut_deudor;
     var ref_oc = body.ref_oc;
     var ref_presupuesto = body.ref_presupuesto;
     var ref_edp = body.ref_edp;
@@ -67,11 +132,10 @@ export default async function handler(req, res) {
     var licitacion = null;
     var org = null;
  
-    // RUTA A: referencia ya es codigo licitacion
+    // RUTA A: referencia ya es codigo de licitacion
     for (var i = 0; i < refs.length; i++) {
-      var ref = refs[i];
-      if (!/^\d+-\d+-(LE|LP|LQ|CO|O1|AG)\d{2}$/i.test(ref)) continue;
-      var d = await getLicit(ref);
+      if (!/^\d+-\d+-(LE|LP|LQ|CO|O1|AG)\d{2}$/i.test(refs[i])) continue;
+      var d = await getLicit(refs[i]);
       if (d) { licitacion = d; break; }
       await sleep(300);
     }
@@ -88,7 +152,8 @@ export default async function handler(req, res) {
     if (!licitacion) {
       await sleep(300);
       var comp = await get(BASE + '/Empresas/BuscarComprador?ticket=' + TICKET);
-      var lista = (comp && comp.listaEmpresas) ? comp.listaEmpresas : [];
+      var lista = comp && comp.listaEmpresas ? comp.listaEmpresas : [];
+ 
       function norm(s) {
         return (s || '').toUpperCase()
           .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -97,19 +162,32 @@ export default async function handler(req, res) {
       var target = norm(razon_social_deudor);
       var words = target.split(' ').filter(function(w) { return w.length > 3; });
       var match = lista.find(function(e) { return norm(e.NombreEmpresa) === target; })
-        || lista.find(function(e) { return words.slice(0,3).every(function(w) { return norm(e.NombreEmpresa).indexOf(w) >= 0; }); });
+        || lista.find(function(e) {
+          return words.slice(0,3).every(function(w) { return norm(e.NombreEmpresa).indexOf(w) >= 0; });
+        });
  
       if (match) {
         org = { nombre: match.NombreEmpresa, codigo: match.CodigoEmpresa };
         await sleep(300);
         var lits = await get(BASE + '/Licitaciones.aspx?ticket=' + TICKET + '&codigoorganismo=' + match.CodigoEmpresa + '&estado=adjudicada');
-        var listado = (lits && lits.Listado) ? lits.Listado : [];
+        var listado = lits && lits.Listado ? lits.Listado : [];
         var best = listado.find(function(l) { return (l.NombreResponsablePago || '').trim(); });
         if (best) {
           await sleep(300);
           var ld = await getLicit(best.CodigoExterno);
           if (ld) { ld.nota = 'Licitacion reciente del organismo'; licitacion = ld; }
         }
+      } else if (rut_deudor) {
+        var rutApi = rut_deudor;
+        var parts = rut_deudor.split('-');
+        if (parts.length === 2) {
+          var n = parseInt(parts[0].replace(/\./g, ''), 10);
+          if (!isNaN(n)) rutApi = n.toLocaleString('es-CL') + '-' + parts[1];
+        }
+        await sleep(300);
+        var prov = await get(BASE + '/Empresas/BuscarProveedor?rutempresaproveedor=' + encodeURIComponent(rutApi) + '&ticket=' + TICKET);
+        var empresa = prov && prov.listaEmpresas && prov.listaEmpresas[0];
+        if (empresa) org = { nombre: empresa.NombreEmpresa, codigo: empresa.CodigoEmpresa };
       }
     }
  
