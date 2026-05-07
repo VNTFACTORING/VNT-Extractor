@@ -1,63 +1,137 @@
+// Detecta si el código tiene formato de Licitación MP (termina en -LE, -LP, -LQ, -CO, -AG, -O1, etc.)
+function isLicitacionCode(ref) {
+  if (!ref) return false;
+  return /^\d+-\d+-[A-Z]{2}\d{2}$/.test(ref.trim()) && !ref.toUpperCase().includes('-CM');
+}
+ 
+// Detecta si es código de OC (termina en -CM)
+function isOCCode(ref) {
+  if (!ref) return false;
+  return /^\d+-\d+-CM\d{2}$/i.test(ref.trim());
+}
+ 
+// Formatea RUT sin puntos → con puntos para la API MP (76416753-8 → 76.416.753-8)
+function formatRutParaAPI(rut) {
+  if (!rut) return rut;
+  const parts = rut.split('-');
+  if (parts.length !== 2) return rut;
+  const num = parseInt(parts[0].replace(/\./g, ''), 10);
+  if (isNaN(num)) return rut;
+  return num.toLocaleString('es-CL') + '-' + parts[1];
+}
+ 
+// Normaliza nombre para comparación fuzzy
+function normalize(s) {
+  return (s || '').toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[.,\-_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+ 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
  
-  const { rut_deudor, razon_social_deudor, ref_oc } = req.body || {};
+  const { rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp } = req.body || {};
   const ticket = process.env.MERCADOPUBLICO_TICKET;
- 
   if (!ticket) return res.status(500).json({ error: 'Ticket MP no configurado' });
-  if (!rut_deudor && !razon_social_deudor) return res.status(400).json({ error: 'Faltan datos del deudor' });
  
-  const result = { org: null, oc: null };
+  const result = { org: null, licitacion: null, oc: null };
+ 
+  // Referencias a intentar como código MP (en orden de prioridad)
+  const referencias = [ref_oc, ref_presupuesto, ref_edp].filter(Boolean);
  
   try {
-    // ── 1. Buscar como Comprador (organismo público) por nombre ──
-    const compradorRes = await fetch(
-      `https://api.mercadopublico.cl/servicios/v1/Publico/Empresas/BuscarComprador?ticket=${ticket}`
-    );
-    if (compradorRes.ok) {
-      const compradorData = await compradorRes.json();
-      const lista = compradorData.listaEmpresas || [];
  
-      // Normalizar nombre para comparación
-      const normalize = (s) => (s || '').toUpperCase()
-        .replace(/[.,\-_]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
+    // ── PASO 1: Buscar licitación directamente por código de referencia ──
+    for (const ref of referencias) {
+      if (!isLicitacionCode(ref) && !isOCCode(ref)) continue;
  
-      const nombreNorm = normalize(razon_social_deudor);
+      // Si es código de OC (-CM), primero buscar la OC para obtener el código de licitación
+      let codigoLicitacion = isLicitacionCode(ref) ? ref : null;
  
-      // Buscar coincidencia exacta primero, luego parcial
-      let match = lista.find(e => normalize(e.NombreEmpresa) === nombreNorm);
-      if (!match) {
-        // Tomar las primeras 3 palabras significativas del nombre
-        const palabras = nombreNorm.split(' ').filter(p => p.length > 3);
-        match = lista.find(e => {
-          const en = normalize(e.NombreEmpresa);
-          return palabras.slice(0, 3).every(p => en.includes(p));
-        });
+      if (isOCCode(ref)) {
+        const ocRes = await fetch(
+          `https://api.mercadopublico.cl/servicios/v1/Publico/ocmpublicas/listarocmpublicas.aspx?ticket=${ticket}&codigo=${encodeURIComponent(ref)}`
+        ).catch(() => null);
+        if (ocRes?.ok) {
+          const ocData = await ocRes.json().catch(() => null);
+          if (ocData && !ocData.Codigo) {
+            const oc = Array.isArray(ocData.listaOCM) ? ocData.listaOCM[0] : ocData;
+            codigoLicitacion = oc?.CodigoLicitacion || oc?.Licitacion?.CodigoExterno || null;
+            result.oc = { codigo: ref, datos: oc };
+          }
+        }
       }
  
-      if (match) {
-        result.org = {
-          codigo: match.CodigoEmpresa,
-          nombre: match.NombreEmpresa,
-          fuente: 'Comprador (Organismo Público)',
-        };
+      // Consultar licitación por código
+      if (codigoLicitacion) {
+        const litRes = await fetch(
+          `https://api.mercadopublico.cl/servicios/v1/Publico/Licitaciones.aspx?ticket=${ticket}&codigo=${encodeURIComponent(codigoLicitacion)}`
+        ).catch(() => null);
+        if (litRes?.ok) {
+          const litData = await litRes.json().catch(() => null);
+          const l = litData?.Listado?.[0];
+          if (l) {
+            result.licitacion = {
+              codigo: l.CodigoExterno,
+              nombre: l.Nombre,
+              estado: l.Estado,
+              organismo: l.Comprador?.NombreOrganismo || null,
+              rut_organismo: l.Comprador?.RutUnidad || null,
+              direccion: [l.Comprador?.DireccionUnidad, l.Comprador?.ComunaUnidad, l.Comprador?.RegionUnidad]
+                .filter(Boolean).join(', ') || null,
+              ejecutivo_compras: l.Comprador?.NombreUsuario || null,
+              cargo_ejecutivo: l.Comprador?.CargoUsuario || null,
+              responsable_pago: l.NombreResponsablePago?.trim() || null,
+              email_pago: l.EmailResponsablePago?.trim() || null,
+              responsable_contrato: l.NombreResponsableContrato?.trim() || null,
+              email_contrato: l.EmailResponsableContrato?.trim() || null,
+              fono_contrato: l.FonoResponsableContrato?.trim() || null,
+              referencia_usada: ref,
+            };
+            break; // Encontrado, no seguir buscando
+          }
+        }
       }
     }
  
-    // ── 2. Si no encontró como Comprador, buscar como Proveedor por RUT ──
+    // ── PASO 2: Buscar organismo como Comprador por nombre ──
+    if (!result.org) {
+      const compradorRes = await fetch(
+        `https://api.mercadopublico.cl/servicios/v1/Publico/Empresas/BuscarComprador?ticket=${ticket}`
+      ).catch(() => null);
+ 
+      if (compradorRes?.ok) {
+        const lista = (await compradorRes.json().catch(() => ({}))).listaEmpresas || [];
+        const nombreNorm = normalize(razon_social_deudor);
+        const palabras = nombreNorm.split(' ').filter(p => p.length > 3);
+ 
+        let match = lista.find(e => normalize(e.NombreEmpresa) === nombreNorm);
+        if (!match && palabras.length >= 2) {
+          match = lista.find(e => {
+            const en = normalize(e.NombreEmpresa);
+            return palabras.slice(0, 3).every(p => en.includes(p));
+          });
+        }
+        if (match) {
+          result.org = {
+            codigo: match.CodigoEmpresa,
+            nombre: match.NombreEmpresa,
+            fuente: 'Organismo Público',
+          };
+        }
+      }
+    }
+ 
+    // ── PASO 3: Fallback — buscar como Proveedor por RUT ──
     if (!result.org && rut_deudor) {
-      // Formatear RUT con puntos para la API
-      const rutConPuntos = formatRutParaAPI(rut_deudor);
+      const rutAPI = formatRutParaAPI(rut_deudor);
       const provRes = await fetch(
-        `https://api.mercadopublico.cl/servicios/v1/Publico/Empresas/BuscarProveedor?rutempresaproveedor=${rutConPuntos}&ticket=${ticket}`
-      );
-      if (provRes.ok) {
-        const provData = await provRes.json();
-        const empresa = (provData.listaEmpresas || [])[0];
+        `https://api.mercadopublico.cl/servicios/v1/Publico/Empresas/BuscarProveedor?rutempresaproveedor=${encodeURIComponent(rutAPI)}&ticket=${ticket}`
+      ).catch(() => null);
+      if (provRes?.ok) {
+        const empresa = (await provRes.json().catch(() => ({}))).listaEmpresas?.[0];
         if (empresa) {
           result.org = {
             codigo: empresa.CodigoEmpresa,
@@ -68,29 +142,33 @@ export default async function handler(req, res) {
       }
     }
  
-    // ── 3. Buscar detalle de OC si se tiene el código en formato MP ──
-    if (ref_oc && isMPFormat(ref_oc)) {
-      const ocRes = await fetch(
-        `https://api.mercadopublico.cl/servicios/v1/Publico/ocmpublicas/listarocmpublicas.aspx?ticket=${ticket}&codigo=${encodeURIComponent(ref_oc)}`
-      );
-      if (ocRes.ok) {
-        const ocData = await ocRes.json();
-        if (!ocData.Codigo) {
-          // Extraer info relevante de la OC
-          const oc = Array.isArray(ocData.listaOCM) ? ocData.listaOCM[0] : ocData;
-          if (oc) {
-            result.oc = {
-              codigo: oc.CodigoOC || ref_oc,
-              nombre: oc.Nombre || null,
-              estado: oc.CodigoEstado || null,
-              comprador_nombre: oc.Comprador?.NombreOrganismo || null,
-              comprador_unidad: oc.Comprador?.UnidadCompra || null,
-              comprador_rut: oc.Comprador?.RutUnidad || null,
-              responsable_nombre: oc.Comprador?.NombreResponsable || null,
-              responsable_email: oc.Comprador?.MailResponsable || null,
-              responsable_fono: oc.Comprador?.FonoResponsable || null,
-            };
-          }
+    // ── PASO 4: Si encontramos organismo pero no licitación, buscar licitaciones recientes ──
+    if (result.org && !result.licitacion) {
+      const litRecRes = await fetch(
+        `https://api.mercadopublico.cl/servicios/v1/Publico/Licitaciones.aspx?ticket=${ticket}&codigoorganismo=${result.org.codigo}&estado=adjudicada`
+      ).catch(() => null);
+      if (litRecRes?.ok) {
+        const litRecData = await litRecRes.json().catch(() => ({}));
+        const licitaciones = litRecData?.Listado || [];
+        // Tomar la más reciente con responsables definidos
+        const conResponsable = licitaciones.find(l =>
+          l.NombreResponsablePago?.trim() || l.NombreResponsableContrato?.trim()
+        );
+        if (conResponsable) {
+          result.licitacion = {
+            codigo: conResponsable.CodigoExterno,
+            nombre: conResponsable.Nombre,
+            estado: conResponsable.Estado,
+            organismo: conResponsable.Comprador?.NombreOrganismo || result.org.nombre,
+            responsable_pago: conResponsable.NombreResponsablePago?.trim() || null,
+            email_pago: conResponsable.EmailResponsablePago?.trim() || null,
+            responsable_contrato: conResponsable.NombreResponsableContrato?.trim() || null,
+            email_contrato: conResponsable.EmailResponsableContrato?.trim() || null,
+            fono_contrato: conResponsable.FonoResponsableContrato?.trim() || null,
+            ejecutivo_compras: conResponsable.Comprador?.NombreUsuario || null,
+            cargo_ejecutivo: conResponsable.Comprador?.CargoUsuario || null,
+            nota: 'Licitación reciente del organismo (referencia no encontrada directamente)',
+          };
         }
       }
     }
@@ -100,20 +178,4 @@ export default async function handler(req, res) {
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
-}
- 
-// Formatea RUT sin puntos → con puntos para la API (ej: 76416753-8 → 76.416.753-8)
-function formatRutParaAPI(rut) {
-  if (!rut) return rut;
-  const [num, dv] = rut.split('-');
-  if (!num || !dv) return rut;
-  const n = parseInt(num.replace(/\./g, ''), 10);
-  if (isNaN(n)) return rut;
-  return n.toLocaleString('es-CL').replace(/\./g, '.') + '-' + dv;
-}
- 
-// Detecta si el ref_oc tiene formato Mercado Público (ej: 750-12345-CM26, 1549-38-LP26)
-function isMPFormat(ref) {
-  if (!ref) return false;
-  return /^\d+-\d+-[A-Z]{2}\d{2}$/.test(ref.trim());
 }
