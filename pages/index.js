@@ -14,11 +14,9 @@ export default function Home() {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
  
-  // Normaliza RUT: elimina puntos, asegura guión antes del DV
   function normalizeRut(rut) {
     if (!rut) return rut;
     let r = String(rut).trim().replace(/\./g, '').toUpperCase();
-    // Si no tiene guión y tiene más de 1 carácter, insertar guión antes del último
     if (!r.includes('-') && r.length > 1) {
       r = r.slice(0, -1) + '-' + r.slice(-1);
     }
@@ -76,7 +74,6 @@ export default function Home() {
           throw new Error(e.error || 'Error ' + res.status);
         }
         const data = await res.json();
-        // Normalizar RUTs por si el modelo dejó puntos
         if (data.rut_emisor) data.rut_emisor = normalizeRut(data.rut_emisor);
         if (data.rut_deudor) data.rut_deudor = normalizeRut(data.rut_deudor);
         allResults.push({ ok: true, data, filename: files[i].name });
@@ -85,8 +82,6 @@ export default function Home() {
         allResults.push({ ok: false, error: e.message, filename: files[i].name });
         setStatuses(prev => ({ ...prev, [i]: 'error' }));
       }
- 
-      // Pausa entre facturas para no saturar el rate limit de Anthropic
       if (i < files.length - 1) await sleep(2500);
     }
     setResults(allResults);
@@ -99,37 +94,41 @@ export default function Home() {
     return String(v);
   }
  
-  // Exporta en formato GVE Carga Masiva
+  function toDateGVE(fecha) {
+    if (!fecha) return '';
+    if (fecha.includes('/')) {
+      const [dd, mm, yyyy] = fecha.split('/');
+      return `${yyyy}-${mm}-${dd}`;
+    }
+    return fecha;
+  }
+ 
   function exportGVE() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
-    const hdr = ['RUTconGuión', 'RazonSocial', 'MontoDocto', 'FechaVenc', 'NumDocto'];
+    const hdr = ['RUTconGuión', 'RazonSocial', 'MontoDocto', 'FechaVenc', 'NumDocto', 'N° OC', 'N° Presupuesto', 'N° Estado de Pago / Folio Ref'];
     const rows = ok.map(r => {
       const d = r.data;
-      // Convertir fecha DD/MM/YYYY a YYYY-MM-DD para GVE
-      let fechaGVE = d.fecha_vencimiento || d.fecha_emision || '';
-      if (fechaGVE && fechaGVE.includes('/')) {
-        const [dd, mm, yyyy] = fechaGVE.split('/');
-        fechaGVE = `${yyyy}-${mm}-${dd}`;
-      }
       return [
         d.rut_deudor || '',
         d.razon_social_deudor || '',
         d.total || '',
-        fechaGVE,
+        toDateGVE(d.fecha_vencimiento || d.fecha_emision),
         d.numero_folio || '',
+        d.ref_oc || '',
+        d.ref_presupuesto || '',
+        d.ref_edp || '',
       ];
     });
     navigator.clipboard.writeText([hdr, ...rows].map(r => r.join('\t')).join('\n'))
       .then(() => alert('✓ Copiado en formato GVE — pega directamente en la hoja "Carga Masiva"'))
-      .catch(() => alert('No se pudo copiar automáticamente. Selecciona la tabla y cópiala manualmente.'));
+      .catch(() => alert('No se pudo copiar automáticamente.'));
   }
  
-  // Exporta todo (emisor + deudor + referencia) para análisis
   function exportCompleto() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
-    const hdr = ['Archivo','Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','Fecha Emisión','Fecha Venc.','Neto','IVA','Total','Referencia'];
+    const hdr = ['Archivo', 'Tipo', 'Folio', 'RUT Emisor', 'Emisor', 'RUT Deudor', 'Deudor', 'F. Emisión', 'F. Venc.', 'Neto', 'IVA', 'Total', 'N° OC', 'N° Presupuesto', 'N° Estado de Pago / Folio Ref'];
     const rows = ok.map(r => {
       const d = r.data;
       return [
@@ -145,7 +144,9 @@ export default function Home() {
         d.monto_neto || '',
         d.iva || '',
         d.total || '',
-        d.referencia || '',
+        d.ref_oc || '',
+        d.ref_presupuesto || '',
+        d.ref_edp || '',
       ];
     });
     navigator.clipboard.writeText([hdr, ...rows].map(r => r.join('\t')).join('\n'))
@@ -179,7 +180,7 @@ export default function Home() {
         .brand span { color: #2AADB8; }
         .sep { color: rgba(255,255,255,.2); margin: 0 10px; }
         .tool { font-size: 13px; color: rgba(255,255,255,.45); }
-        .page { max-width: 980px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+        .page { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
         .drop { background: #fff; border-radius: 14px; border: 2px dashed #DDE2EA; padding: 2.5rem 2rem; text-align: center; cursor: pointer; transition: all .15s; margin-bottom: 1rem; }
         .drop.over, .drop:hover { border-color: #2AADB8; background: #E6F7F9; }
         .drop.has { border-style: solid; border-color: #2AADB8; background: #E6F7F9; }
@@ -221,9 +222,10 @@ export default function Home() {
         .btn-exp-full { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; background: #fff; color: #1A2B3C; font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; border: 1px solid #DDE2EA; border-radius: 8px; cursor: pointer; }
         .btn-exp-full:hover { background: #F2F4F7; }
         .tbl-wrap { background: #fff; border: 1px solid #DDE2EA; border-radius: 14px; overflow: auto; }
-        table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        table { width: 100%; border-collapse: collapse; min-width: 1100px; }
         thead th { padding: 10px 14px; text-align: left; font-size: 10px; font-weight: 700; color: #6B7A8D; text-transform: uppercase; letter-spacing: .07em; background: #F2F4F7; border-bottom: 1px solid #DDE2EA; white-space: nowrap; }
         thead th.gve { background: #E6F7F9; color: #1F8A94; }
+        thead th.ref { background: #FFF8E6; color: #A67700; }
         tbody tr { border-bottom: .5px solid #DDE2EA; }
         tbody tr:last-child { border-bottom: none; }
         tbody tr:hover { background: #F8FAFB; }
@@ -233,7 +235,8 @@ export default function Home() {
         .total-m { font-weight: 700; color: #1A2B3C; }
         .err-row { color: #C00000; font-family: 'DM Sans', sans-serif; font-size: 12px; }
         .conf-baja { color: #C00000; font-weight: 700; }
-        .ref { font-size: 11px; color: #6B7A8D; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .ref-val { font-weight: 600; color: #A67700; }
+        .empty-ref { color: #DDE2EA; }
         .footer { text-align: center; padding: 2rem 0 1rem; font-size: 11px; color: #6B7A8D; }
         .footer a { color: #2AADB8; text-decoration: none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} }
@@ -341,7 +344,9 @@ export default function Home() {
                     <th className="gve">Neto</th>
                     <th>IVA</th>
                     <th className="gve">Total</th>
-                    <th>Referencia</th>
+                    <th className="ref">N° OC</th>
+                    <th className="ref">N° Presupuesto</th>
+                    <th className="ref">N° EDP / Folio Ref</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -350,21 +355,23 @@ export default function Home() {
                       <td className="nm">{r.filename.length>22?r.filename.slice(0,20)+'…':r.filename}</td>
                       <td>{fmt(r.data.tipo_documento)}</td>
                       <td style={{fontWeight:600}}>{fmt(r.data.numero_folio)}</td>
-                      <td className={r.data.confianza?.rut_emisor === 'baja' ? 'conf-baja' : ''}>{fmt(r.data.rut_emisor)}</td>
+                      <td className={r.data.confianza?.rut_emisor==='baja'?'conf-baja':''}>{fmt(r.data.rut_emisor)}</td>
                       <td>{fmt(r.data.razon_social_emisor)}</td>
-                      <td className={r.data.confianza?.rut_deudor === 'baja' ? 'conf-baja' : ''}>{fmt(r.data.rut_deudor)}</td>
+                      <td className={r.data.confianza?.rut_deudor==='baja'?'conf-baja':''}>{fmt(r.data.rut_deudor)}</td>
                       <td>{fmt(r.data.razon_social_deudor)}</td>
                       <td>{fmt(r.data.fecha_emision)}</td>
                       <td style={{fontWeight:600}}>{fmt(r.data.fecha_vencimiento)}</td>
                       <td className="money">{fmt(r.data.monto_neto, true)}</td>
                       <td>{fmt(r.data.iva, true)}</td>
                       <td className="total-m">{fmt(r.data.total, true)}</td>
-                      <td className="ref" title={r.data.referencia || ''}>{fmt(r.data.referencia)}</td>
+                      <td className={r.data.ref_oc ? 'ref-val' : 'empty-ref'}>{r.data.ref_oc || '—'}</td>
+                      <td className={r.data.ref_presupuesto ? 'ref-val' : 'empty-ref'}>{r.data.ref_presupuesto || '—'}</td>
+                      <td className={r.data.ref_edp ? 'ref-val' : 'empty-ref'}>{r.data.ref_edp || '—'}</td>
                     </tr>
                   ) : (
                     <tr key={i}>
                       <td className="nm">{r.filename}</td>
-                      <td colSpan={12} className="err-row">Error: {r.error}</td>
+                      <td colSpan={15} className="err-row">Error: {r.error}</td>
                     </tr>
                   ))}
                 </tbody>
