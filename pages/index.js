@@ -13,6 +13,10 @@ export default function Home() {
   const [over, setOver] = useState(false);
   const inputRef = useRef();
  
+  // ── Estado configuración de vencimiento ──────────────────────────────────
+  const [vencDias, setVencDias] = useState('30');
+  const [vencBase, setVencBase] = useState('hoy'); // 'hoy' | 'emision'
+ 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
  
   function normalizeRut(rut) {
@@ -20,6 +24,35 @@ export default function Home() {
     let r = String(rut).trim().replace(/\./g, '').toUpperCase();
     if (!r.includes('-') && r.length > 1) r = r.slice(0, -1) + '-' + r.slice(-1);
     return r;
+  }
+ 
+  // ── Calcula fecha de vencimiento según configuración ──────────────────────
+  function calcularVencimiento(fechaEmision) {
+    const dias = parseInt(vencDias, 10);
+    if (isNaN(dias) || dias <= 0) return null;
+ 
+    let base;
+    if (vencBase === 'hoy') {
+      base = new Date();
+    } else {
+      // Parsear fecha DD/MM/YYYY
+      if (!fechaEmision) return null;
+      const [dd, mm, yyyy] = fechaEmision.split('/');
+      base = new Date(`${yyyy}-${mm}-${dd}`);
+      if (isNaN(base.getTime())) return null;
+    }
+ 
+    base.setDate(base.getDate() + dias);
+    const d = String(base.getDate()).padStart(2, '0');
+    const m = String(base.getMonth() + 1).padStart(2, '0');
+    const y = base.getFullYear();
+    return `${d}/${m}/${y}`;
+  }
+ 
+  // Devuelve la fecha de vencimiento efectiva para una fila
+  function getVencimiento(data) {
+    const calculada = calcularVencimiento(data.fecha_emision);
+    return calculada || data.fecha_vencimiento || data.fecha_emision || '';
   }
  
   function addFiles(newFiles) {
@@ -48,7 +81,6 @@ export default function Home() {
     });
   }
  
-  // Consulta MP para una factura individual
   async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp) {
     try {
       const res = await fetch('/api/mercadopublico', {
@@ -63,7 +95,6 @@ export default function Home() {
     }
   }
  
-  // Consulta MP para TODAS las facturas extraídas automáticamente
   async function consultarMPTodas(allResults) {
     const okRows = allResults.map((r, i) => ({ r, i })).filter(({ r }) => r.ok);
     if (!okRows.length) return;
@@ -71,7 +102,6 @@ export default function Home() {
     setProcessingMP(true);
     setProgressMP({ current: 0, total: okRows.length });
  
-    // Marcar todas como loading
     const loadingState = {};
     okRows.forEach(({ i }) => { loadingState[i] = { loading: true }; });
     setMpData(loadingState);
@@ -79,17 +109,7 @@ export default function Home() {
     for (let idx = 0; idx < okRows.length; idx++) {
       const { r, i } = okRows[idx];
       setProgressMP({ current: idx + 1, total: okRows.length });
- 
-      await consultarMP(
-        i,
-        r.data.rut_deudor,
-        r.data.razon_social_deudor,
-        r.data.ref_oc,
-        r.data.ref_presupuesto,
-        r.data.ref_edp
-      );
- 
-      // Pausa entre consultas MP para no sobrecargar el servidor
+      await consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp);
       if (idx < okRows.length - 1) await sleep(1200);
     }
  
@@ -98,6 +118,14 @@ export default function Home() {
  
   async function extract() {
     if (!files.length || processing) return;
+ 
+    // Validar configuración de vencimiento
+    const dias = parseInt(vencDias, 10);
+    if (isNaN(dias) || dias <= 0) {
+      alert('Debes ingresar un número de días de vencimiento válido antes de extraer.');
+      return;
+    }
+ 
     setProcessing(true);
     setResults([]); setMpData({});
     const ns = {}; files.forEach((_, i) => { ns[i] = 'queue'; }); setStatuses({ ...ns });
@@ -128,8 +156,6 @@ export default function Home() {
  
     setResults(allResults);
     setProcessing(false);
- 
-    // ── Automáticamente consultar MP para todas las facturas OK ──
     await consultarMPTodas(allResults);
   }
  
@@ -146,31 +172,41 @@ export default function Home() {
   }
  
   function exportGVE() {
+    const dias = parseInt(vencDias, 10);
+    if (isNaN(dias) || dias <= 0) {
+      alert('Debes configurar los días de vencimiento antes de exportar.');
+      return;
+    }
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
-    const hdr = ['RUTconGuión','RazonSocial','MontoDocto','FechaVenc','NumDocto','N° OC','N° Presupuesto','N° Estado de Pago / Folio Ref'];
+ 
+    // Columnas exactas del formato GVE Carga Masiva (5 columnas):
+    // RUTconGuión | RazonSocial | MontoDocto | FechaVenc | NumDocto
+    const hdr = ['RUTconGuión','RazonSocial','MontoDocto','FechaVenc','NumDocto'];
     const rows = ok.map(r => {
       const d = r.data;
-      return [d.rut_deudor||'', d.razon_social_deudor||'', d.total||'', toDateGVE(d.fecha_vencimiento||d.fecha_emision), d.numero_folio||'', d.ref_oc||'', d.ref_presupuesto||'', d.ref_edp||''];
+      const venc = toDateGVE(getVencimiento(d));
+      return [d.rut_deudor||'', d.razon_social_deudor||'', d.total||'', venc, d.numero_folio||''];
     });
+ 
     navigator.clipboard.writeText([hdr,...rows].map(r=>r.join('\t')).join('\n'))
-      .then(()=>alert('✓ Copiado en formato GVE'))
+      .then(()=>alert('✓ Copiado en formato GVE (Carga Masiva)'))
       .catch(()=>alert('No se pudo copiar automáticamente.'));
   }
  
   function exportCompleto() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
-    const hdr = ['Archivo','Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Neto','IVA','Total','N° OC','N° Presupuesto','N° EDP','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
+    const hdr = ['Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Total','N° OC','N° Presupuesto','N° EDP','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
     const rows = ok.map((r, i) => {
       const d = r.data;
       const mp = mpData[i]?.data;
       return [
-        r.filename, d.tipo_documento||'', d.numero_folio||'',
+        d.tipo_documento||'', d.numero_folio||'',
         d.rut_emisor||'', d.razon_social_emisor||'',
         d.rut_deudor||'', d.razon_social_deudor||'',
-        d.fecha_emision||'', d.fecha_vencimiento||'',
-        d.monto_neto||'', d.iva||'', d.total||'',
+        d.fecha_emision||'', getVencimiento(d),
+        d.total||'',
         d.ref_oc||'', d.ref_presupuesto||'', d.ref_edp||'',
         mp?.licitacion?.organismo||mp?.org?.nombre||'',
         mp?.licitacion?.codigo||'',
@@ -198,6 +234,9 @@ export default function Home() {
   const statusColor = { queue:'#6B7A8D', processing:'#1A6AB5', done:'#0A7055', error:'#C00000' };
   const statusBg   = { queue:'#F2F4F7', processing:'#E8F4FF', done:'#E1F5EE', error:'#FFF0F0' };
  
+  const diasValido = !isNaN(parseInt(vencDias, 10)) && parseInt(vencDias, 10) > 0;
+  const baseLabel = vencBase === 'hoy' ? 'fecha de hoy' : 'fecha de emisión';
+ 
   return (
     <>
       <Head>
@@ -216,6 +255,29 @@ export default function Home() {
         .sep { color:rgba(255,255,255,.2); margin:0 10px; }
         .tool { font-size:13px; color:rgba(255,255,255,.45); }
         .page { max-width:1300px; margin:0 auto; padding:2rem 1.5rem 4rem; }
+ 
+        /* ── Panel vencimiento ── */
+        .venc-panel { background:#fff; border:1px solid #DDE2EA; border-radius:14px; padding:1.125rem 1.25rem; margin-bottom:1rem; }
+        .venc-header { display:flex; align-items:center; gap:8px; margin-bottom:.875rem; }
+        .venc-title { font-size:13px; font-weight:600; color:#1A2B3C; }
+        .venc-badge-ok { font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; background:#E1F5EE; color:#0A7055; }
+        .venc-badge-warn { font-size:10px; font-weight:700; padding:2px 8px; border-radius:20px; background:#FFF3CD; color:#856404; }
+        .venc-body { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+        .venc-field { display:flex; align-items:center; gap:8px; }
+        .venc-label { font-size:12px; color:#6B7A8D; white-space:nowrap; }
+        .venc-input { width:72px; padding:7px 10px; border:1px solid #DDE2EA; border-radius:8px; font-size:14px; font-weight:600; font-family:'DM Mono',monospace; color:#1A2B3C; background:#F8FAFB; text-align:center; outline:none; transition:border .15s; }
+        .venc-input:focus { border-color:#2AADB8; background:#fff; }
+        .venc-input.invalid { border-color:#C00000; background:#FFF0F0; }
+        .venc-sep { color:#DDE2EA; font-size:18px; }
+        .venc-tabs { display:flex; border:1px solid #DDE2EA; border-radius:8px; overflow:hidden; }
+        .venc-tab { padding:7px 14px; font-size:12px; font-weight:500; font-family:'DM Sans',sans-serif; border:none; cursor:pointer; transition:all .15s; background:#F8FAFB; color:#6B7A8D; }
+        .venc-tab.active { background:#1A2B3C; color:#fff; }
+        .venc-tab:first-child { border-right:1px solid #DDE2EA; }
+        .venc-preview { font-size:12px; color:#6B7A8D; margin-left:4px; }
+        .venc-preview strong { color:#1A2B3C; font-weight:600; font-family:'DM Mono',monospace; }
+        .venc-default { font-size:11px; color:#2AADB8; cursor:pointer; text-decoration:underline; margin-left:auto; white-space:nowrap; }
+        .venc-default:hover { color:#1F8A94; }
+ 
         .drop { background:#fff; border-radius:14px; border:2px dashed #DDE2EA; padding:2.5rem 2rem; text-align:center; cursor:pointer; transition:all .15s; margin-bottom:1rem; }
         .drop.over,.drop:hover { border-color:#2AADB8; background:#E6F7F9; }
         .drop.has { border-style:solid; border-color:#2AADB8; background:#E6F7F9; }
@@ -259,6 +321,7 @@ export default function Home() {
         .export-btns { display:flex; gap:8px; flex-wrap:wrap; }
         .btn-exp-gve { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#1A2B3C; color:#fff; font-size:13px; font-weight:600; font-family:'DM Sans',sans-serif; border:none; border-radius:8px; cursor:pointer; }
         .btn-exp-gve:hover { opacity:.85; }
+        .btn-exp-gve:disabled { opacity:.4; cursor:not-allowed; }
         .btn-exp-full { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#fff; color:#1A2B3C; font-size:13px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #DDE2EA; border-radius:8px; cursor:pointer; }
         .btn-exp-full:hover { background:#F2F4F7; }
         .tbl-wrap { background:#fff; border:1px solid #DDE2EA; border-radius:14px; overflow:auto; }
@@ -267,6 +330,7 @@ export default function Home() {
         thead th.gve { background:#E6F7F9; color:#1F8A94; }
         thead th.ref { background:#FFF8E6; color:#A67700; }
         thead th.mp  { background:#F0EEFF; color:#5B2ED8; }
+        thead th.venc-col { background:#E8F4FF; color:#1A6AB5; }
         tbody tr { border-bottom:.5px solid #DDE2EA; }
         tbody tr:last-child { border-bottom:none; }
         tbody tr:hover { background:#F8FAFB; }
@@ -278,6 +342,7 @@ export default function Home() {
         .conf-baja { color:#C00000; font-weight:700; }
         .ref-val { font-weight:600; color:#A67700; }
         .empty-ref { color:#DDE2EA; }
+        .venc-calc { font-weight:700; color:#1A6AB5; }
         .mp-cell { min-width:220px; font-family:'DM Sans',sans-serif; }
         .mp-loading { font-size:11px; color:#7C3AED; display:flex; align-items:center; gap:6px; }
         .mp-spinner { width:12px; height:12px; border:2px solid #DDD; border-top-color:#7C3AED; border-radius:50%; animation:spin .7s linear infinite; }
@@ -293,7 +358,7 @@ export default function Home() {
         .mp-err { font-size:11px; color:#C00000; }
         .footer { text-align:center; padding:2rem 0 1rem; font-size:11px; color:#6B7A8D; }
         .footer a { color:#2AADB8; text-decoration:none; }
-        @media(max-width:500px){ .summary{grid-template-columns:1fr;} }
+        @media(max-width:500px){ .summary{grid-template-columns:1fr;} .venc-body{flex-direction:column;align-items:flex-start;} }
       `}</style>
  
       <div className="top">
@@ -310,6 +375,53 @@ export default function Home() {
       <div className="page">
         <input ref={inputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
           onChange={e => { addFiles(e.target.files); e.target.value=''; }} />
+ 
+        {/* ── Panel configuración vencimiento ── */}
+        <div className="venc-panel">
+          <div className="venc-header">
+            <span className="venc-title">📅 Fecha de vencimiento</span>
+            {diasValido
+              ? <span className="venc-badge-ok">✓ Configurado</span>
+              : <span className="venc-badge-warn">⚠ Requerido</span>
+            }
+            {!(vencDias === '30' && vencBase === 'hoy') && (
+              <span className="venc-default" onClick={() => { setVencDias('30'); setVencBase('hoy'); }}>
+                Usar recomendado (30 días desde hoy)
+              </span>
+            )}
+          </div>
+          <div className="venc-body">
+            <div className="venc-field">
+              <span className="venc-label">Días de vencimiento</span>
+              <input
+                className={`venc-input${!diasValido ? ' invalid' : ''}`}
+                type="number"
+                min="1"
+                max="365"
+                value={vencDias}
+                onChange={e => setVencDias(e.target.value)}
+                placeholder="30"
+              />
+            </div>
+            <span className="venc-sep">·</span>
+            <div className="venc-field">
+              <span className="venc-label">A partir de</span>
+              <div className="venc-tabs">
+                <button className={`venc-tab${vencBase==='hoy'?' active':''}`} onClick={() => setVencBase('hoy')}>
+                  Fecha de hoy
+                </button>
+                <button className={`venc-tab${vencBase==='emision'?' active':''}`} onClick={() => setVencBase('emision')}>
+                  Fecha de emisión
+                </button>
+              </div>
+            </div>
+            {diasValido && (
+              <span className="venc-preview">
+                → vence a <strong>{vencDias} días</strong> desde la {baseLabel}
+              </span>
+            )}
+          </div>
+        </div>
  
         <div className={`drop${files.length?' has':''}${over?' over':''}`}
           onClick={() => inputRef.current.click()}
@@ -353,7 +465,6 @@ export default function Home() {
           </div>
         )}
  
-        {/* Barra extracción */}
         {processing && (
           <div className="prog">
             <div className="prog-label">
@@ -364,7 +475,6 @@ export default function Home() {
           </div>
         )}
  
-        {/* Barra Mercado Público */}
         {processingMP && (
           <div className="prog">
             <div className="prog-label">
@@ -375,7 +485,6 @@ export default function Home() {
           </div>
         )}
  
-        {/* Estado MP completado */}
         {!processingMP && mpTotal > 0 && !processing && (
           <div style={{fontSize:12, color:'#5B2ED8', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
             ✓ Mercado Público: {mpDone}/{mpTotal} consultadas
@@ -395,7 +504,7 @@ export default function Home() {
               <span className="results-title">{okResults.length} factura{okResults.length!==1?'s':''} extraída{okResults.length!==1?'s':''}</span>
               {okResults.length > 0 && (
                 <div className="export-btns">
-                  <button className="btn-exp-gve" onClick={exportGVE}>⬇ Exportar GVE (Carga Masiva)</button>
+                  <button className="btn-exp-gve" onClick={exportGVE} disabled={!diasValido}>⬇ Exportar GVE (Carga Masiva)</button>
                   <button className="btn-exp-full" onClick={exportCompleto}>⬇ Exportar completo + MP</button>
                 </div>
               )}
@@ -404,11 +513,12 @@ export default function Home() {
               <table>
                 <thead>
                   <tr>
-                    <th>Archivo</th><th>Tipo</th><th>Folio</th>
+                    <th>Tipo</th><th>Folio</th>
                     <th className="gve">RUT Emisor</th><th>Emisor</th>
                     <th className="gve">RUT Deudor</th><th>Deudor</th>
-                    <th>F. Emisión</th><th className="gve">F. Venc.</th>
-                    <th className="gve">Neto</th><th>IVA</th><th className="gve">Total</th>
+                    <th>F. Emisión</th>
+                    <th className="venc-col">F. Venc. ({diasValido ? `+${vencDias}d` : '?'})</th>
+                    <th className="gve">Total</th>
                     <th className="ref">N° OC</th><th className="ref">N° Presupuesto</th><th className="ref">N° EDP</th>
                     <th className="mp">Responsable MP</th>
                   </tr>
@@ -419,7 +529,6 @@ export default function Home() {
                     const lit = mp?.data?.licitacion;
                     return r.ok ? (
                       <tr key={i}>
-                        <td className="nm">{r.filename.length>22?r.filename.slice(0,20)+'…':r.filename}</td>
                         <td>{fmt(r.data.tipo_documento)}</td>
                         <td style={{fontWeight:600}}>{fmt(r.data.numero_folio)}</td>
                         <td className={r.data.confianza?.rut_emisor==='baja'?'conf-baja':''}>{fmt(r.data.rut_emisor)}</td>
@@ -427,20 +536,13 @@ export default function Home() {
                         <td className={r.data.confianza?.rut_deudor==='baja'?'conf-baja':''}>{fmt(r.data.rut_deudor)}</td>
                         <td>{fmt(r.data.razon_social_deudor)}</td>
                         <td>{fmt(r.data.fecha_emision)}</td>
-                        <td style={{fontWeight:600}}>{fmt(r.data.fecha_vencimiento)}</td>
-                        <td className="money">{fmt(r.data.monto_neto, true)}</td>
-                        <td>{fmt(r.data.iva, true)}</td>
+                        <td className="venc-calc" style={{fontWeight:700}}>{diasValido ? fmt(getVencimiento(r.data)) : <span style={{color:'#DDE2EA'}}>—</span>}</td>
                         <td className="total-m">{fmt(r.data.total, true)}</td>
                         <td className={r.data.ref_oc?'ref-val':'empty-ref'}>{r.data.ref_oc||'—'}</td>
                         <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>{r.data.ref_presupuesto||'—'}</td>
                         <td className={r.data.ref_edp?'ref-val':'empty-ref'}>{r.data.ref_edp||'—'}</td>
                         <td className="mp-cell">
-                          {mp?.loading && (
-                            <div className="mp-loading">
-                              <div className="mp-spinner"/>
-                              Consultando MP…
-                            </div>
-                          )}
+                          {mp?.loading && <div className="mp-loading"><div className="mp-spinner"/>Consultando MP…</div>}
                           {mp?.error && (
                             <div style={{display:'flex',flexDirection:'column',gap:4}}>
                               <span className="mp-err">Error: {mp.error}</span>
@@ -475,9 +577,7 @@ export default function Home() {
                                       {lit.fono_contrato && <div className="mp-fono">📞 {lit.fono_contrato}</div>}
                                     </>
                                   )}
-                                  {lit.ejecutivo_compras && (
-                                    <div className="mp-cargo" style={{marginTop:3}}>🛒 {lit.ejecutivo_compras}</div>
-                                  )}
+                                  {lit.ejecutivo_compras && <div className="mp-cargo" style={{marginTop:3}}>🛒 {lit.ejecutivo_compras}</div>}
                                   {lit.nota && <div className="mp-nota">⚠️ {lit.nota}</div>}
                                 </>
                               ) : mp.data.org ? (
@@ -492,8 +592,7 @@ export default function Home() {
                       </tr>
                     ) : (
                       <tr key={i}>
-                        <td className="nm">{r.filename}</td>
-                        <td colSpan={16} className="err-row">Error: {r.error}</td>
+                        <td colSpan={13} className="err-row">{r.filename} — Error: {r.error}</td>
                       </tr>
                     );
                   })}
