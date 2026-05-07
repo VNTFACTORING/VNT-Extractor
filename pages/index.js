@@ -14,6 +14,17 @@ export default function Home() {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
  
+  // Normaliza RUT: elimina puntos, asegura guión antes del DV
+  function normalizeRut(rut) {
+    if (!rut) return rut;
+    let r = String(rut).trim().replace(/\./g, '').toUpperCase();
+    // Si no tiene guión y tiene más de 1 carácter, insertar guión antes del último
+    if (!r.includes('-') && r.length > 1) {
+      r = r.slice(0, -1) + '-' + r.slice(-1);
+    }
+    return r;
+  }
+ 
   function addFiles(newFiles) {
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
@@ -65,6 +76,9 @@ export default function Home() {
           throw new Error(e.error || 'Error ' + res.status);
         }
         const data = await res.json();
+        // Normalizar RUTs por si el modelo dejó puntos
+        if (data.rut_emisor) data.rut_emisor = normalizeRut(data.rut_emisor);
+        if (data.rut_deudor) data.rut_deudor = normalizeRut(data.rut_deudor);
         allResults.push({ ok: true, data, filename: files[i].name });
         setStatuses(prev => ({ ...prev, [i]: 'done' }));
       } catch (e) {
@@ -85,17 +99,58 @@ export default function Home() {
     return String(v);
   }
  
-  function exportTSV() {
+  // Exporta en formato GVE Carga Masiva
+  function exportGVE() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
-    const hdr = ['Archivo','Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','Fecha','Neto','IVA','Total'];
+    const hdr = ['RUTconGuión', 'RazonSocial', 'MontoDocto', 'FechaVenc', 'NumDocto'];
     const rows = ok.map(r => {
       const d = r.data;
-      return [r.filename, d.tipo_documento||'', d.numero_folio||'', d.rut_emisor||'', d.razon_social_emisor||'', d.rut_deudor||'', d.razon_social_deudor||'', d.fecha_emision||'', d.monto_neto||'', d.iva||'', d.total||''];
+      // Convertir fecha DD/MM/YYYY a YYYY-MM-DD para GVE
+      let fechaGVE = d.fecha_vencimiento || d.fecha_emision || '';
+      if (fechaGVE && fechaGVE.includes('/')) {
+        const [dd, mm, yyyy] = fechaGVE.split('/');
+        fechaGVE = `${yyyy}-${mm}-${dd}`;
+      }
+      return [
+        d.rut_deudor || '',
+        d.razon_social_deudor || '',
+        d.total || '',
+        fechaGVE,
+        d.numero_folio || '',
+      ];
     });
     navigator.clipboard.writeText([hdr, ...rows].map(r => r.join('\t')).join('\n'))
-      .then(() => alert('✓ Copiado — pega en Excel o GVE'))
+      .then(() => alert('✓ Copiado en formato GVE — pega directamente en la hoja "Carga Masiva"'))
       .catch(() => alert('No se pudo copiar automáticamente. Selecciona la tabla y cópiala manualmente.'));
+  }
+ 
+  // Exporta todo (emisor + deudor + referencia) para análisis
+  function exportCompleto() {
+    const ok = results.filter(r => r.ok);
+    if (!ok.length) return;
+    const hdr = ['Archivo','Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','Fecha Emisión','Fecha Venc.','Neto','IVA','Total','Referencia'];
+    const rows = ok.map(r => {
+      const d = r.data;
+      return [
+        r.filename,
+        d.tipo_documento || '',
+        d.numero_folio || '',
+        d.rut_emisor || '',
+        d.razon_social_emisor || '',
+        d.rut_deudor || '',
+        d.razon_social_deudor || '',
+        d.fecha_emision || '',
+        d.fecha_vencimiento || '',
+        d.monto_neto || '',
+        d.iva || '',
+        d.total || '',
+        d.referencia || '',
+      ];
+    });
+    navigator.clipboard.writeText([hdr, ...rows].map(r => r.join('\t')).join('\n'))
+      .then(() => alert('✓ Copiado completo — pega en Excel'))
+      .catch(() => alert('No se pudo copiar automáticamente.'));
   }
  
   const okResults = results.filter(r => r.ok);
@@ -124,7 +179,7 @@ export default function Home() {
         .brand span { color: #2AADB8; }
         .sep { color: rgba(255,255,255,.2); margin: 0 10px; }
         .tool { font-size: 13px; color: rgba(255,255,255,.45); }
-        .page { max-width: 860px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
+        .page { max-width: 980px; margin: 0 auto; padding: 2rem 1.5rem 4rem; }
         .drop { background: #fff; border-radius: 14px; border: 2px dashed #DDE2EA; padding: 2.5rem 2rem; text-align: center; cursor: pointer; transition: all .15s; margin-bottom: 1rem; }
         .drop.over, .drop:hover { border-color: #2AADB8; background: #E6F7F9; }
         .drop.has { border-style: solid; border-color: #2AADB8; background: #E6F7F9; }
@@ -160,11 +215,15 @@ export default function Home() {
         .sv.accent { color: #1F8A94; }
         .results-hdr { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
         .results-title { font-size: 14px; font-weight: 600; color: #1A2B3C; }
-        .btn-exp { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; background: #1A2B3C; color: #fff; font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; border: none; border-radius: 8px; cursor: pointer; }
-        .btn-exp:hover { opacity: .85; }
+        .export-btns { display: flex; gap: 8px; flex-wrap: wrap; }
+        .btn-exp-gve { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; background: #1A2B3C; color: #fff; font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; border: none; border-radius: 8px; cursor: pointer; }
+        .btn-exp-gve:hover { opacity: .85; }
+        .btn-exp-full { display: inline-flex; align-items: center; gap: 6px; padding: 9px 18px; background: #fff; color: #1A2B3C; font-size: 13px; font-weight: 600; font-family: 'DM Sans', sans-serif; border: 1px solid #DDE2EA; border-radius: 8px; cursor: pointer; }
+        .btn-exp-full:hover { background: #F2F4F7; }
         .tbl-wrap { background: #fff; border: 1px solid #DDE2EA; border-radius: 14px; overflow: auto; }
-        table { width: 100%; border-collapse: collapse; min-width: 720px; }
+        table { width: 100%; border-collapse: collapse; min-width: 900px; }
         thead th { padding: 10px 14px; text-align: left; font-size: 10px; font-weight: 700; color: #6B7A8D; text-transform: uppercase; letter-spacing: .07em; background: #F2F4F7; border-bottom: 1px solid #DDE2EA; white-space: nowrap; }
+        thead th.gve { background: #E6F7F9; color: #1F8A94; }
         tbody tr { border-bottom: .5px solid #DDE2EA; }
         tbody tr:last-child { border-bottom: none; }
         tbody tr:hover { background: #F8FAFB; }
@@ -174,6 +233,7 @@ export default function Home() {
         .total-m { font-weight: 700; color: #1A2B3C; }
         .err-row { color: #C00000; font-family: 'DM Sans', sans-serif; font-size: 12px; }
         .conf-baja { color: #C00000; font-weight: 700; }
+        .ref { font-size: 11px; color: #6B7A8D; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .footer { text-align: center; padding: 2rem 0 1rem; font-size: 11px; color: #6B7A8D; }
         .footer a { color: #2AADB8; text-decoration: none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} }
@@ -259,17 +319,29 @@ export default function Home() {
             <div className="results-hdr">
               <span className="results-title">{okResults.length} factura{okResults.length!==1?'s':''} extraída{okResults.length!==1?'s':''}</span>
               {okResults.length > 0 && (
-                <button className="btn-exp" onClick={exportTSV}>⬇ Exportar a Excel / GVE</button>
+                <div className="export-btns">
+                  <button className="btn-exp-gve" onClick={exportGVE}>⬇ Exportar GVE (Carga Masiva)</button>
+                  <button className="btn-exp-full" onClick={exportCompleto}>⬇ Exportar completo</button>
+                </div>
               )}
             </div>
             <div className="tbl-wrap">
               <table>
                 <thead>
                   <tr>
-                    <th>Archivo</th><th>Tipo</th><th>Folio</th>
-                    <th>RUT Emisor</th><th>Emisor</th>
-                    <th>RUT Deudor</th><th>Deudor</th>
-                    <th>Fecha</th><th>Neto</th><th>IVA</th><th>Total</th>
+                    <th>Archivo</th>
+                    <th>Tipo</th>
+                    <th>Folio</th>
+                    <th className="gve">RUT Emisor</th>
+                    <th>Emisor</th>
+                    <th className="gve">RUT Deudor</th>
+                    <th>Deudor</th>
+                    <th>F. Emisión</th>
+                    <th className="gve">F. Venc.</th>
+                    <th className="gve">Neto</th>
+                    <th>IVA</th>
+                    <th className="gve">Total</th>
+                    <th>Referencia</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -283,14 +355,16 @@ export default function Home() {
                       <td className={r.data.confianza?.rut_deudor === 'baja' ? 'conf-baja' : ''}>{fmt(r.data.rut_deudor)}</td>
                       <td>{fmt(r.data.razon_social_deudor)}</td>
                       <td>{fmt(r.data.fecha_emision)}</td>
+                      <td style={{fontWeight:600}}>{fmt(r.data.fecha_vencimiento)}</td>
                       <td className="money">{fmt(r.data.monto_neto, true)}</td>
                       <td>{fmt(r.data.iva, true)}</td>
                       <td className="total-m">{fmt(r.data.total, true)}</td>
+                      <td className="ref" title={r.data.referencia || ''}>{fmt(r.data.referencia)}</td>
                     </tr>
                   ) : (
                     <tr key={i}>
                       <td className="nm">{r.filename}</td>
-                      <td colSpan={10} className="err-row">Error: {r.error}</td>
+                      <td colSpan={12} className="err-row">Error: {r.error}</td>
                     </tr>
                   ))}
                 </tbody>
