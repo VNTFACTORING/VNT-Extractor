@@ -18,10 +18,14 @@ function isLicitacionCode(ref) {
   return /^\d+-\d+-(LE|LP|LQ|LR|CO|O1|AG|L1|L2|L3)\d{2}$/i.test((ref || '').trim());
 }
  
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+ 
 async function apiFetch(url) {
   try {
     const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 5000);
+    setTimeout(() => ctrl.abort(), 6000);
     const res = await fetch(url, { signal: ctrl.signal });
     if (!res.ok) return null;
     return await res.json();
@@ -30,12 +34,7 @@ async function apiFetch(url) {
   }
 }
  
-// Consulta un código de licitación y retorna datos completos
-async function getLicitacionData(codigo, ticket) {
-  const data = await apiFetch(
-    `https://api.mercadopublico.cl/servicios/v1/Publico/Licitaciones.aspx?ticket=${ticket}&codigo=${encodeURIComponent(codigo)}`
-  );
-  const l = data?.Listado?.[0];
+function parseLicitacion(l) {
   if (!l) return null;
   return {
     codigo:               l.CodigoExterno,
@@ -55,30 +54,45 @@ async function getLicitacionData(codigo, ticket) {
   };
 }
  
-// RUTA B: extrae el prefijo de la OC y prueba 3030-1-LE26 ... 3030-10-LE26 en paralelo
-// Solo sufijo LE (más común) y máximo 10 candidatos → ~2s total
+async function getLicitacionData(codigo, ticket) {
+  const data = await apiFetch(
+    `https://api.mercadopublico.cl/servicios/v1/Publico/Licitaciones.aspx?ticket=${ticket}&codigo=${encodeURIComponent(codigo)}`
+  );
+  return parseLicitacion(data?.Listado?.[0]);
+}
+ 
+// RUTA B — secuencial con delay para respetar el rate limit de MP (~3 req/s)
+// Prueba PREFIX-1-LE26, PREFIX-1-LP26... PREFIX-5-LE26... hasta encontrar responsable
+// Máximo ~15 llamadas, ~5 segundos
 async function buscarPorPrefijoOC(codigoOC, ticket) {
   const prefijo = codigoOC.split('-')[0];
   const anio    = codigoOC.match(/(\d{2})$/)?.[1];
   if (!prefijo || !anio) return null;
  
-  const sufijos    = ['LE', 'LP', 'CO', 'O1', 'LQ'];
-  const candidatos = [];
-  for (let n = 1; n <= 10; n++) {
+  const sufijos = ['LE', 'LP', 'CO', 'O1', 'LQ'];
+ 
+  for (let n = 1; n <= 5; n++) {
     for (const suf of sufijos) {
-      candidatos.push(`${prefijo}-${n}-${suf}${anio}`);
+      const codigo = `${prefijo}-${n}-${suf}${anio}`;
+      const data   = await getLicitacionData(codigo, ticket);
+ 
+      if (data?.responsable_pago) return data;  // Encontrado con responsable → parar
+      if (data?.organismo)        {              // Encontrado sin responsable → guardar y seguir buscando uno mejor
+        await sleep(300);
+        continue;
+      }
+      await sleep(200); // delay anti rate-limit entre llamadas
     }
   }
  
-  // Todas en paralelo — máximo 50 llamadas, ~2s
-  const resultados = await Promise.all(
-    candidatos.map(cod => getLicitacionData(cod, ticket))
-  );
+  // Si no encontramos con responsable, devolver el primero con organismo
+  for (let n = 1; n <= 3; n++) {
+    const data = await getLicitacionData(`${prefijo}-${n}-LE${anio}`, ticket);
+    if (data?.organismo) return data;
+    await sleep(200);
+  }
  
-  // Prioridad: tiene responsable_pago > tiene organismo
-  return resultados.find(r => r?.responsable_pago)
-      || resultados.find(r => r?.organismo)
-      || null;
+  return null;
 }
  
 // ─── Handler ──────────────────────────────────────────────────────────────
@@ -93,39 +107,42 @@ export default async function handler(req, res) {
   const result = { org: null, licitacion: null, ruta: [] };
   const refs   = [ref_oc, ref_presupuesto, ref_edp].filter(Boolean);
  
-  // ── RUTA A + RUTA B en paralelo ──────────────────────────────────────────
-  // A = refs que ya son códigos de licitación → consultar directo
-  // B = refs que son OC → buscar por prefijo
-  if (refs.length > 0) {
-    const rutaAPromises = refs.filter(isLicitacionCode).map(r => getLicitacionData(r, ticket));
-    const rutaBPromises = refs.map(r => buscarPorPrefijoOC(r, ticket));
+  // ── RUTA A: ref ya es código de licitación → consultar directo ────────────
+  for (const ref of refs) {
+    if (!isLicitacionCode(ref)) continue;
+    result.ruta.push(`RUTA A: ${ref}`);
+    const data = await getLicitacionData(ref, ticket);
+    if (data) {
+      result.licitacion = data;
+      result.org = { nombre: data.organismo, rut: data.rut_organismo };
+      result.ruta.push(`✓ A: ${data.codigo}`);
+      break;
+    }
+    await sleep(300);
+  }
  
-    const [rutaAResults, rutaBResults] = await Promise.all([
-      Promise.all(rutaAPromises),
-      Promise.all(rutaBPromises),
-    ]);
- 
-    const encontrado =
-      rutaAResults.find(r => r?.responsable_pago) ||
-      rutaBResults.find(r => r?.responsable_pago) ||
-      rutaAResults.find(r => r?.organismo)         ||
-      rutaBResults.find(r => r?.organismo)         ||
-      null;
- 
-    if (encontrado) {
-      result.licitacion = { ...encontrado };
-      result.org = { nombre: encontrado.organismo, rut: encontrado.rut_organismo };
-      result.ruta.push(`✓ Licitación: ${encontrado.codigo}`);
+  // ── RUTA B: prefijo OC → buscar licitaciones secuencialmente ─────────────
+  if (!result.licitacion && refs.length > 0) {
+    for (const ref of refs) {
+      result.ruta.push(`RUTA B: prefijo "${ref}"`);
+      const data = await buscarPorPrefijoOC(ref, ticket);
+      if (data) {
+        result.licitacion = data;
+        result.org = { nombre: data.organismo, rut: data.rut_organismo };
+        result.ruta.push(`✓ B: ${data.codigo}`);
+        break;
+      }
     }
   }
  
-  // ── RUTA C: buscar organismo por nombre (siempre, en paralelo con A+B) ───
+  // ── RUTA C: buscar organismo por nombre del deudor ────────────────────────
   if (!result.org) {
+    result.ruta.push(`RUTA C: "${razon_social_deudor}"`);
     const compData = await apiFetch(
       `https://api.mercadopublico.cl/servicios/v1/Publico/Empresas/BuscarComprador?ticket=${ticket}`
     );
-    const lista    = compData?.listaEmpresas || [];
-    const nomNorm  = normalize(razon_social_deudor);
+    const lista   = compData?.listaEmpresas || [];
+    const nomNorm = normalize(razon_social_deudor);
     const palabras = nomNorm.split(' ').filter(p => p.length > 3);
  
     const match =
@@ -134,9 +151,10 @@ export default async function handler(req, res) {
  
     if (match) {
       result.org = { nombre: match.NombreEmpresa, codigo: match.CodigoEmpresa };
-      result.ruta.push(`✓ Organismo (C): ${match.NombreEmpresa}`);
+      result.ruta.push(`✓ C org: ${match.NombreEmpresa}`);
  
       if (!result.licitacion) {
+        await sleep(300);
         const litData = await apiFetch(
           `https://api.mercadopublico.cl/servicios/v1/Publico/Licitaciones.aspx?ticket=${ticket}&codigoorganismo=${match.CodigoEmpresa}&estado=adjudicada`
         );
@@ -144,21 +162,23 @@ export default async function handler(req, res) {
           (l.NombreResponsablePago || '').trim() || (l.NombreResponsableContrato || '').trim()
         );
         if (conResp) {
+          await sleep(300);
           const d = await getLicitacionData(conResp.CodigoExterno, ticket);
           if (d) {
             result.licitacion = { ...d, nota: 'Licitación reciente del organismo' };
-            result.ruta.push(`✓ Licitación reciente (C): ${d.codigo}`);
+            result.ruta.push(`✓ C licit: ${d.codigo}`);
           }
         }
       }
     } else if (rut_deudor) {
+      await sleep(300);
       const provData = await apiFetch(
         `https://api.mercadopublico.cl/servicios/v1/Publico/Empresas/BuscarProveedor?rutempresaproveedor=${encodeURIComponent(formatRutParaAPI(rut_deudor))}&ticket=${ticket}`
       );
       const empresa = provData?.listaEmpresas?.[0];
       if (empresa) {
         result.org = { nombre: empresa.NombreEmpresa, codigo: empresa.CodigoEmpresa };
-        result.ruta.push(`✓ Proveedor: ${empresa.NombreEmpresa}`);
+        result.ruta.push(`✓ C prov: ${empresa.NombreEmpresa}`);
       }
     }
   }
@@ -173,4 +193,3 @@ export default async function handler(req, res) {
 export const config = {
   api: { bodyParser: { sizeLimit: '1mb' }, responseLimit: false },
 };
-
