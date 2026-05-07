@@ -43,19 +43,35 @@ REGLAS PARA IDENTIFICAR EMISOR Y DEUDOR:
 - DEUDOR: quien RECIBE el documento y debe pagar (el cliente o mandante). Busca "Cliente", "Mandante", "Razón Social del receptor", o el RUT destinatario.
 - En Estados de Pago (EPA): el EMISOR es el contratista/proveedor, el DEUDOR es el mandante/cliente.
 - En Facturas Electrónicas: el EMISOR es quien factura, el DEUDOR es el receptor de la factura.
-- En Notas de Débito: el EMISOR es quien emite la nota, el DEUDOR es el receptor.
+- En Notas de Débito/Crédito: el EMISOR es quien emite la nota, el DEUDOR es el receptor.
 - En Boletas: el EMISOR es el comercio, el DEUDOR puede ser null si no está identificado.
 - NUNCA intercambies emisor y deudor. Si hay duda, marca confianza como "baja".
  
+FORMATO DE RUT — MUY IMPORTANTE:
+- Siempre sin puntos, con guión y dígito verificador.
+- Formato correcto: XXXXXXXX-X (ejemplos: 76416753-8, 71918300-K, 9123456-7)
+- Si el RUT en el documento tiene puntos (ej: 76.416.753-8), elimínalos: 76416753-8
+- El dígito verificador puede ser número o letra K (siempre mayúscula)
+ 
+CAMPO REFERENCIA:
+- Extrae el número o código de referencia del documento si existe (orden de compra, contrato, código interno, número de pedido, etc.)
+- Si hay múltiples referencias, sepáralas con " | "
+- Si no hay referencia, usa null
+ 
+CAMPO FECHA DE VENCIMIENTO:
+- Busca explícitamente la fecha de vencimiento o fecha de pago del documento
+- Si no existe, usa la fecha de emisión como fallback
+- Formato: DD/MM/YYYY
+ 
 Responde SOLO con JSON valido sin markdown ni texto adicional:
-{"tipo_documento":"string","numero_folio":"string","rut_emisor":"string","razon_social_emisor":"string","rut_deudor":"string","razon_social_deudor":"string","fecha_emision":"DD/MM/YYYY","monto_neto":0,"iva":0,"total":0,"confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
+{"tipo_documento":"string","numero_folio":"string","rut_emisor":"XXXXXXXX-X","razon_social_emisor":"string","rut_deudor":"XXXXXXXX-X","razon_social_deudor":"string","fecha_emision":"DD/MM/YYYY","fecha_vencimiento":"DD/MM/YYYY","monto_neto":0,"iva":0,"total":0,"referencia":"string","confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
  
 Montos como enteros sin puntos ni decimales. Campos no visibles = null.`;
  
   try {
     const response = await callAnthropic({
       model: 'claude-sonnet-4-6',
-      max_tokens: 1000,
+      max_tokens: 1024,
       messages: [{ role: 'user', content: [content, { type: 'text', text: prompt }] }],
     });
  
