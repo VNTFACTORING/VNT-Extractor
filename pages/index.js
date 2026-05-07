@@ -1,6 +1,3 @@
-
-Copiar
-
 import { useState, useRef } from 'react';
 import Head from 'next/head';
  
@@ -398,4 +395,4 @@ export default function Home() {
       </div>
     </>
   );
-
+}
