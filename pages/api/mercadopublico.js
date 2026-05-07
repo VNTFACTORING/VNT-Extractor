@@ -20,12 +20,12 @@ async function getLicit(codigo) {
     nombre:        l.Nombre,
     organismo:     l.Comprador?.NombreOrganismo || null,
     unidad:        l.Comprador?.NombreUnidad    || null,
-    ejecutivo:     (l.Comprador?.NombreUsuario  || '').trim() || null,
-    resp_pago:     (l.NombreResponsablePago     || '').trim() || null,
+    ejecutivo_compras:     (l.Comprador?.NombreUsuario  || '').trim() || null,
+    responsable_pago:     (l.NombreResponsablePago     || '').trim() || null,
     email_pago:    (l.EmailResponsablePago      || '').trim() || null,
-    resp_contrato: (l.NombreResponsableContrato || '').trim() || null,
+    responsable_contrato: (l.NombreResponsableContrato || '').trim() || null,
     email_contrato:(l.EmailResponsableContrato  || '').trim() || null,
-    fono:          (l.FonoResponsableContrato   || '').trim() || null,
+    fono_contrato:          (l.FonoResponsableContrato   || '').trim() || null,
   };
 }
  
@@ -40,7 +40,7 @@ async function buscarDesdeOC(ref) {
     for (var n = 1; n <= 5; n++) {
       await sleep(300);
       const d = await getLicit(prefijo + '-' + n + '-' + sufijos[si] + anio);
-      if (d && d.resp_pago) return d;
+      if (d && d.responsable_pago) return d;
       if (d && d.organismo) return d;
     }
   }
