@@ -1,5 +1,7 @@
 import { supabase } from '../../lib/supabase'
 
+const SELECT = `id, rut, nombre, unidades (id, nombre, contactos (resp_pago, email_pago, resp_contrato, email_contrato, fono_contrato, ejecutivo_compras, licitacion_origen, codigo_licitacion, folio_factura, found_at))`
+
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     const { rut_organismo, nombre_organismo, nombre_unidad, contacto } = req.body
@@ -44,11 +46,12 @@ export default async function handler(req, res) {
       let data, error
 
       if (esNumero) {
-        // Buscar por folio de factura
-        const { data: porFolio } = await supabase
+        const { data: porFolio, error: errFolio } = await supabase
           .from('contactos')
           .select('unidad_id, unidades(organismo_id)')
           .eq('folio_factura', q.trim())
+
+        if (errFolio) throw errFolio
 
         const organismoIds = porFolio
           ? [...new Set(porFolio.map(c => c.unidades?.organismo_id).filter(Boolean))]
@@ -57,61 +60,23 @@ export default async function handler(req, res) {
         if (organismoIds.length > 0) {
           const result = await supabase
             .from('organismos')
-            .select(`
-              id, rut, nombre,
-              unidades (
-                id, nombre,
-                contactos (
-                  resp_pago, email_pago,
-                  resp_contrato, email_contrato,
-                  fono_contrato, ejecutivo_compras,
-                  licitacion_origen, codigo_licitacion,
-                  folio_factura, found_at
-                )
-              )
-            `)
+            .select(SELECT)
             .in('id', organismoIds)
           data = result.data
           error = result.error
         } else {
-          // No hay folio, buscar por RUT exacto
           const result = await supabase
             .from('organismos')
-            .select(`
-              id, rut, nombre,
-              unidades (
-                id, nombre,
-                contactos (
-                  resp_pago, email_pago,
-                  resp_contrato, email_contrato,
-                  fono_contrato, ejecutivo_compras,
-                  licitacion_origen, codigo_licitacion,
-                  folio_factura, found_at
-                )
-              )
-            `)
+            .select(SELECT)
             .eq('rut', q.trim())
             .limit(10)
           data = result.data
           error = result.error
         }
       } else {
-        // Buscar por nombre de organismo
         const result = await supabase
           .from('organismos')
-          .select(`
-            id, rut, nombre,
-            unidades (
-              id, nombre,
-              contactos (
-                resp_pago, email_pago,
-                resp_contrato, email_contrato,
-                fono_contrato, ejecutivo_compras,
-                licitacion_origen, codigo_licitacion,
-                folio_factura, found_at
-              )
-            )
-          `)
+          .select(SELECT)
           .ilike('nombre', `%${q}%`)
           .limit(10)
         data = result.data
