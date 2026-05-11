@@ -76,12 +76,12 @@ export default function Home() {
     });
   }
 
-  async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp) {
+  async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp, folio) {
     try {
       const res = await fetch('/api/mercadopublico', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp })
+        body: JSON.stringify({ rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp, folio })
       });
       const data = await res.json();
       setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, data } }));
@@ -101,7 +101,7 @@ export default function Home() {
     for (let idx = 0; idx < okRows.length; idx++) {
       const { r, i } = okRows[idx];
       setProgressMP({ current: idx + 1, total: okRows.length });
-      await consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp);
+      await consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp, r.data.numero_folio);
       if (idx < okRows.length - 1) await sleep(1200);
     }
     setProcessingMP(false);
@@ -521,18 +521,18 @@ export default function Home() {
                           {mp?.error && (
                             <div style={{display:'flex',flexDirection:'column',gap:4}}>
                               <span className="mp-err">Error: {mp.error}</span>
-                              <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
+                              <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp, r.data.numero_folio)}>🔄 Reintentar</button>
                             </div>
                           )}
                           {!mp && !processingMP && (
-                            <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔍 Buscar</button>
+                            <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp, r.data.numero_folio)}>🔍 Buscar</button>
                           )}
                           {mp?.data && !mp.loading && (
                             <div>
                               {!mp.data.licitacion && !mp.data.org && (
                                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
                                   <span className="mp-none">No encontrado en MP</span>
-                                  <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
+                                  <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp, r.data.numero_folio)}>🔄 Reintentar</button>
                                 </div>
                               )}
                               {lit ? (
