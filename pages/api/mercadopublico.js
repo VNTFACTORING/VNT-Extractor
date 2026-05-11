@@ -140,6 +140,18 @@ async function guardarEnSupabase(licitacion, folio, rut_deudor) {
                           licitacion.responsable_contrato || licitacion.email_contrato;
     if (!tieneContacto) return;
 
+    // Verificar si ya existe este contacto para este folio y unidad
+    if (folio) {
+      const { data: existe } = await supabase
+        .from('contactos')
+        .select('id')
+        .eq('unidad_id', unidad.id)
+        .eq('folio_factura', folio)
+        .limit(1)
+
+      if (existe && existe.length > 0) return;
+    }
+
     await supabase.from('contactos').insert({
       unidad_id:            unidad.id,
       resp_pago:            licitacion.responsable_pago || null,
