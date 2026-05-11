@@ -1,6 +1,6 @@
 import { supabase } from '../../lib/supabase'
 
-const SELECT = `id, rut, nombre, unidades (id, nombre, contactos (resp_pago, email_pago, resp_contrato, email_contrato, fono_contrato, ejecutivo_compras, licitacion_origen, codigo_licitacion, folio_factura, found_at))`
+const SELECT = `id, rut, nombre, unidades (id, nombre, contactos (resp_pago, email_pago, resp_contrato, email_contrato, fono_contrato, ejecutivo_compras, licitacion_origen, codigo_licitacion, folio_factura, rut_deudor, found_at))`
 
 export default async function handler(req, res) {
   if (req.method === 'POST') {
@@ -29,6 +29,7 @@ export default async function handler(req, res) {
         licitacion_origen: contacto.licitacion_origen,
         codigo_licitacion: contacto.codigo_licitacion,
         folio_factura:     contacto.folio_factura,
+        rut_deudor:        contacto.rut_deudor,
       })
       if (errCon) throw errCon
       return res.status(200).json({ ok: true })
@@ -43,9 +44,11 @@ export default async function handler(req, res) {
 
     try {
       const esNumero = /^\d+$/.test(q.trim())
+      const esRut = q.includes('-')
       let data, error
 
       if (esNumero) {
+        // Buscar por folio de factura
         const { data: porFolio, error: errFolio } = await supabase
           .from('contactos')
           .select('unidad_id, unidades(organismo_id)')
@@ -65,15 +68,26 @@ export default async function handler(req, res) {
           data = result.data
           error = result.error
         } else {
+          // No hay folio, intentar como RUT numérico
           const result = await supabase
             .from('organismos')
             .select(SELECT)
-            .eq('rut', q.trim())
+            .ilike('rut', `%${q}%`)
             .limit(10)
           data = result.data
           error = result.error
         }
+      } else if (esRut) {
+        // Buscar por RUT con guión
+        const result = await supabase
+          .from('organismos')
+          .select(SELECT)
+          .ilike('rut', `%${q.replace(/\./g, '')}%`)
+          .limit(10)
+        data = result.data
+        error = result.error
       } else {
+        // Buscar por nombre
         const result = await supabase
           .from('organismos')
           .select(SELECT)
