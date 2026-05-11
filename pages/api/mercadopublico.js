@@ -111,7 +111,7 @@ async function buscarDesdeOC(ref) {
   return fallback;
 }
 
-async function guardarEnSupabase(licitacion, folio) {
+async function guardarEnSupabase(licitacion, folio, rut_deudor) {
   try {
     if (!licitacion || !licitacion.rut_organismo || !licitacion.organismo) return;
 
@@ -122,8 +122,7 @@ async function guardarEnSupabase(licitacion, folio) {
     const { data: organismo, error: errOrg } = await supabase
       .from('organismos')
       .upsert({ rut, nombre: nombre_organismo }, { onConflict: 'rut' })
-      .select()
-      .single();
+      .select().single();
 
     if (errOrg || !organismo) return;
 
@@ -133,8 +132,7 @@ async function guardarEnSupabase(licitacion, folio) {
         { organismo_id: organismo.id, nombre: nombre_unidad },
         { onConflict: 'organismo_id,nombre' }
       )
-      .select()
-      .single();
+      .select().single();
 
     if (errUni || !unidad) return;
 
@@ -153,6 +151,7 @@ async function guardarEnSupabase(licitacion, folio) {
       licitacion_origen:    licitacion.nombre || null,
       codigo_licitacion:    licitacion.codigo || null,
       folio_factura:        folio || null,
+      rut_deudor:           rut_deudor || null,
     });
 
   } catch (e) {
@@ -242,7 +241,7 @@ export default async function handler(req, res) {
     }
 
     if (licitacion) {
-      guardarEnSupabase(licitacion, folio);
+      guardarEnSupabase(licitacion, folio, rut_deudor);
     }
 
     return res.status(200).json({ org: org, licitacion: licitacion });
