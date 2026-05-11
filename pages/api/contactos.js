@@ -76,11 +76,12 @@ export default async function handler(req, res) {
           error = result.error
         }
       } else if (esRut) {
-        const rutNorm = q.trim().replace(/\./g, '')
+        // Quitar puntos y DV para buscar solo los dígitos base
+        const rutDigitos = q.trim().replace(/\./g, '').replace(/-.*$/, '')
         const result = await supabase
           .from('organismos')
           .select(SELECT)
-          .ilike('rut', `%${rutNorm}%`)
+          .ilike('rut', `%${rutDigitos}%`)
           .limit(10)
         data = result.data
         error = result.error
