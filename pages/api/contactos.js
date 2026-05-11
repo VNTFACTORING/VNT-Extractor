@@ -17,16 +17,16 @@ export default async function handler(req, res) {
       if (errUni) throw errUni
 
       const { error: errCon } = await supabase.from('contactos').insert({
-        unidad_id: unidad.id,
-        resp_pago: contacto.resp_pago,
-        email_pago: contacto.email_pago,
-        resp_contrato: contacto.resp_contrato,
-        email_contrato: contacto.email_contrato,
-        fono_contrato: contacto.fono_contrato,
+        unidad_id:         unidad.id,
+        resp_pago:         contacto.resp_pago,
+        email_pago:        contacto.email_pago,
+        resp_contrato:     contacto.resp_contrato,
+        email_contrato:    contacto.email_contrato,
+        fono_contrato:     contacto.fono_contrato,
         ejecutivo_compras: contacto.ejecutivo_compras,
         licitacion_origen: contacto.licitacion_origen,
         codigo_licitacion: contacto.codigo_licitacion,
-        folio_factura: contacto.folio_factura,
+        folio_factura:     contacto.folio_factura,
       })
       if (errCon) throw errCon
       return res.status(200).json({ ok: true })
@@ -44,6 +44,7 @@ export default async function handler(req, res) {
       let data, error
 
       if (esNumero) {
+        // Buscar por folio de factura
         const { data: porFolio } = await supabase
           .from('contactos')
           .select('unidad_id, unidades(organismo_id)')
@@ -73,6 +74,7 @@ export default async function handler(req, res) {
           data = result.data
           error = result.error
         } else {
+          // No hay folio, buscar por RUT exacto
           const result = await supabase
             .from('organismos')
             .select(`
@@ -88,12 +90,13 @@ export default async function handler(req, res) {
                 )
               )
             `)
-            .or(`rut.eq.${q},nombre.ilike.%${q}%`)
+            .eq('rut', q.trim())
             .limit(10)
           data = result.data
           error = result.error
         }
       } else {
+        // Buscar por nombre de organismo
         const result = await supabase
           .from('organismos')
           .select(`
@@ -109,7 +112,7 @@ export default async function handler(req, res) {
               )
             )
           `)
-          .or(`rut.eq.${q},nombre.ilike.%${q}%`)
+          .ilike('nombre', `%${q}%`)
           .limit(10)
         data = result.data
         error = result.error
