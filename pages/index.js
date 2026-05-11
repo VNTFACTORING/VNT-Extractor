@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import Head from 'next/head';
- 
+import Link from 'next/link';
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [results, setResults] = useState([]);
@@ -12,49 +13,43 @@ export default function Home() {
   const [mpData, setMpData] = useState({});
   const [over, setOver] = useState(false);
   const inputRef = useRef();
- 
-  // ── Estado configuración de vencimiento ──────────────────────────────────
+
   const [vencDias, setVencDias] = useState('30');
-  const [vencBase, setVencBase] = useState('hoy'); // 'hoy' | 'emision'
- 
+  const [vencBase, setVencBase] = useState('hoy');
+
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
- 
+
   function normalizeRut(rut) {
     if (!rut) return rut;
     let r = String(rut).trim().replace(/\./g, '').toUpperCase();
     if (!r.includes('-') && r.length > 1) r = r.slice(0, -1) + '-' + r.slice(-1);
     return r;
   }
- 
-  // ── Calcula fecha de vencimiento según configuración ──────────────────────
+
   function calcularVencimiento(fechaEmision) {
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) return null;
- 
     let base;
     if (vencBase === 'hoy') {
       base = new Date();
     } else {
-      // Parsear fecha DD/MM/YYYY
       if (!fechaEmision) return null;
       const [dd, mm, yyyy] = fechaEmision.split('/');
       base = new Date(`${yyyy}-${mm}-${dd}`);
       if (isNaN(base.getTime())) return null;
     }
- 
     base.setDate(base.getDate() + dias);
     const d = String(base.getDate()).padStart(2, '0');
     const m = String(base.getMonth() + 1).padStart(2, '0');
     const y = base.getFullYear();
     return `${d}/${m}/${y}`;
   }
- 
-  // Devuelve la fecha de vencimiento efectiva para una fila
+
   function getVencimiento(data) {
     const calculada = calcularVencimiento(data.fecha_emision);
     return calculada || data.fecha_vencimiento || data.fecha_emision || '';
   }
- 
+
   function addFiles(newFiles) {
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
@@ -62,16 +57,16 @@ export default function Home() {
     });
     setResults([]); setStatuses({}); setMpData({});
   }
- 
+
   function removeFile(i) { setFiles(prev => prev.filter((_, idx) => idx !== i)); }
- 
+
   function clearAll() {
     setFiles([]); setResults([]); setStatuses({});
     setProgress({ current: 0, total: 0 });
     setProgressMP({ current: 0, total: 0 });
     setMpData({});
   }
- 
+
   async function toB64(file) {
     return new Promise((res, rej) => {
       const r = new FileReader();
@@ -80,7 +75,7 @@ export default function Home() {
       r.readAsDataURL(file);
     });
   }
- 
+
   async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp) {
     try {
       const res = await fetch('/api/mercadopublico', {
@@ -94,42 +89,34 @@ export default function Home() {
       setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, error: e.message } }));
     }
   }
- 
+
   async function consultarMPTodas(allResults) {
     const okRows = allResults.map((r, i) => ({ r, i })).filter(({ r }) => r.ok);
     if (!okRows.length) return;
- 
     setProcessingMP(true);
     setProgressMP({ current: 0, total: okRows.length });
- 
     const loadingState = {};
     okRows.forEach(({ i }) => { loadingState[i] = { loading: true }; });
     setMpData(loadingState);
- 
     for (let idx = 0; idx < okRows.length; idx++) {
       const { r, i } = okRows[idx];
       setProgressMP({ current: idx + 1, total: okRows.length });
       await consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp);
       if (idx < okRows.length - 1) await sleep(1200);
     }
- 
     setProcessingMP(false);
   }
- 
+
   async function extract() {
     if (!files.length || processing) return;
- 
-    // Validar configuración de vencimiento
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) {
       alert('Debes ingresar un número de días de vencimiento válido antes de extraer.');
       return;
     }
- 
     setProcessing(true);
     setResults([]); setMpData({});
     const ns = {}; files.forEach((_, i) => { ns[i] = 'queue'; }); setStatuses({ ...ns });
- 
     const allResults = [];
     for (let i = 0; i < files.length; i++) {
       setProgress({ current: i + 1, total: files.length });
@@ -153,24 +140,23 @@ export default function Home() {
       }
       if (i < files.length - 1) await sleep(2500);
     }
- 
     setResults(allResults);
     setProcessing(false);
     await consultarMPTodas(allResults);
   }
- 
+
   function fmt(v, money) {
     if (v === null || v === undefined) return '—';
     if (money) return '$\u00A0' + Number(v).toLocaleString('es-CL');
     return String(v);
   }
- 
+
   function toDateGVE(fecha) {
     if (!fecha) return '';
     if (fecha.includes('/')) { const [dd, mm, yyyy] = fecha.split('/'); return `${yyyy}-${mm}-${dd}`; }
     return fecha;
   }
- 
+
   function exportGVE() {
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) {
@@ -179,21 +165,17 @@ export default function Home() {
     }
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
- 
-    // Columnas exactas del formato GVE Carga Masiva (5 columnas):
-    // RUTconGuión | RazonSocial | MontoDocto | FechaVenc | NumDocto
     const hdr = ['RUTconGuión','RazonSocial','MontoDocto','FechaVenc','NumDocto'];
     const rows = ok.map(r => {
       const d = r.data;
       const venc = toDateGVE(getVencimiento(d));
       return [d.rut_deudor||'', d.razon_social_deudor||'', d.total||'', venc, d.numero_folio||''];
     });
- 
     navigator.clipboard.writeText([hdr,...rows].map(r=>r.join('\t')).join('\n'))
-      .then(()=>alert('✓ Copiado en formato GVE (Carga Masiva)'))
+      .then(()=>alert('Copiado en formato GVE (Carga Masiva)'))
       .catch(()=>alert('No se pudo copiar automáticamente.'));
   }
- 
+
   function exportCompleto() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
@@ -220,23 +202,23 @@ export default function Home() {
       ];
     });
     navigator.clipboard.writeText([hdr,...rows].map(r=>r.join('\t')).join('\n'))
-      .then(()=>alert('✓ Copiado completo'))
+      .then(()=>alert('Copiado completo'))
       .catch(()=>alert('No se pudo copiar.'));
   }
- 
+
   const okResults = results.filter(r => r.ok);
   const totalNeto = okResults.reduce((s, r) => s + (r.data.monto_neto || 0), 0);
   const totalFinal = okResults.reduce((s, r) => s + (r.data.total || 0), 0);
   const mpDone = Object.values(mpData).filter(m => !m.loading).length;
   const mpTotal = Object.keys(mpData).length;
- 
+
   const statusLabel = { queue:'En cola', processing:'Procesando…', done:'✓ Listo', error:'Error' };
   const statusColor = { queue:'#6B7A8D', processing:'#1A6AB5', done:'#0A7055', error:'#C00000' };
   const statusBg   = { queue:'#F2F4F7', processing:'#E8F4FF', done:'#E1F5EE', error:'#FFF0F0' };
- 
+
   const diasValido = !isNaN(parseInt(vencDias, 10)) && parseInt(vencDias, 10) > 0;
   const baseLabel = vencBase === 'hoy' ? 'fecha de hoy' : 'fecha de emisión';
- 
+
   return (
     <>
       <Head>
@@ -253,10 +235,10 @@ export default function Home() {
         .brand { font-size:15px; font-weight:700; color:#fff; margin-left:8px; }
         .brand span { color:#2AADB8; }
         .sep { color:rgba(255,255,255,.2); margin:0 10px; }
-        .tool { font-size:13px; color:rgba(255,255,255,.45); }
+        .nav-link { font-size:13px; font-weight:500; color:rgba(255,255,255,.45); text-decoration:none; padding-bottom:4px; transition:color .15s; }
+        .nav-link:hover { color:rgba(255,255,255,.8); }
+        .nav-link.active { color:#fff; font-weight:600; border-bottom:2px solid #2AADB8; }
         .page { max-width:1300px; margin:0 auto; padding:2rem 1.5rem 4rem; }
- 
-        /* ── Panel vencimiento ── */
         .venc-panel { background:#fff; border:1px solid #DDE2EA; border-radius:14px; padding:1.125rem 1.25rem; margin-bottom:1rem; }
         .venc-header { display:flex; align-items:center; gap:8px; margin-bottom:.875rem; }
         .venc-title { font-size:13px; font-weight:600; color:#1A2B3C; }
@@ -277,7 +259,6 @@ export default function Home() {
         .venc-preview strong { color:#1A2B3C; font-weight:600; font-family:'DM Mono',monospace; }
         .venc-default { font-size:11px; color:#2AADB8; cursor:pointer; text-decoration:underline; margin-left:auto; white-space:nowrap; }
         .venc-default:hover { color:#1F8A94; }
- 
         .drop { background:#fff; border-radius:14px; border:2px dashed #DDE2EA; padding:2.5rem 2rem; text-align:center; cursor:pointer; transition:all .15s; margin-bottom:1rem; }
         .drop.over,.drop:hover { border-color:#2AADB8; background:#E6F7F9; }
         .drop.has { border-style:solid; border-color:#2AADB8; background:#E6F7F9; }
@@ -360,7 +341,7 @@ export default function Home() {
         .footer a { color:#2AADB8; text-decoration:none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} .venc-body{flex-direction:column;align-items:flex-start;} }
       `}</style>
- 
+
       <div className="top">
         <div className="dots">
           <div className="dot dim"/><div className="dot"/><div className="dot dim"/>
@@ -369,14 +350,14 @@ export default function Home() {
         </div>
         <span className="brand">Van<span>Trust</span> Capital</span>
         <span className="sep">|</span>
-        <span className="tool">Extractor de Facturas</span>
+        <Link href="/" className="nav-link active">Extractor</Link>
+        <Link href="/contactos" className="nav-link">Contactos MP</Link>
       </div>
- 
+
       <div className="page">
         <input ref={inputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
           onChange={e => { addFiles(e.target.files); e.target.value=''; }} />
- 
-        {/* ── Panel configuración vencimiento ── */}
+
         <div className="venc-panel">
           <div className="venc-header">
             <span className="venc-title">📅 Fecha de vencimiento</span>
@@ -395,9 +376,7 @@ export default function Home() {
               <span className="venc-label">Días de vencimiento</span>
               <input
                 className={`venc-input${!diasValido ? ' invalid' : ''}`}
-                type="number"
-                min="1"
-                max="365"
+                type="number" min="1" max="365"
                 value={vencDias}
                 onChange={e => setVencDias(e.target.value)}
                 placeholder="30"
@@ -407,12 +386,8 @@ export default function Home() {
             <div className="venc-field">
               <span className="venc-label">A partir de</span>
               <div className="venc-tabs">
-                <button className={`venc-tab${vencBase==='hoy'?' active':''}`} onClick={() => setVencBase('hoy')}>
-                  Fecha de hoy
-                </button>
-                <button className={`venc-tab${vencBase==='emision'?' active':''}`} onClick={() => setVencBase('emision')}>
-                  Fecha de emisión
-                </button>
+                <button className={`venc-tab${vencBase==='hoy'?' active':''}`} onClick={() => setVencBase('hoy')}>Fecha de hoy</button>
+                <button className={`venc-tab${vencBase==='emision'?' active':''}`} onClick={() => setVencBase('emision')}>Fecha de emisión</button>
               </div>
             </div>
             {diasValido && (
@@ -422,7 +397,7 @@ export default function Home() {
             )}
           </div>
         </div>
- 
+
         <div className={`drop${files.length?' has':''}${over?' over':''}`}
           onClick={() => inputRef.current.click()}
           onDragOver={e => { e.preventDefault(); setOver(true); }}
@@ -433,7 +408,7 @@ export default function Home() {
           <div className="drop-sub">{files.length ? 'Clic para agregar más archivos' : 'Puedes subir varias a la vez · PDF o imagen'}</div>
           <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">Múltiples archivos</span></div>
         </div>
- 
+
         {files.length > 0 && (
           <div className="queue-list">
             {files.map((f, i) => (
@@ -451,7 +426,7 @@ export default function Home() {
             ))}
           </div>
         )}
- 
+
         {files.length > 0 && (
           <div className="actions">
             <button className="btn-main" onClick={extract} disabled={processing || processingMP}>
@@ -464,7 +439,7 @@ export default function Home() {
             {!processing && !processingMP && <button className="btn-sec" onClick={clearAll}>Limpiar</button>}
           </div>
         )}
- 
+
         {processing && (
           <div className="prog">
             <div className="prog-label">
@@ -474,7 +449,7 @@ export default function Home() {
             <div className="prog-bar"><div className="prog-fill extract" style={{width:`${(progress.current/progress.total)*100}%`}}/></div>
           </div>
         )}
- 
+
         {processingMP && (
           <div className="prog">
             <div className="prog-label">
@@ -484,13 +459,13 @@ export default function Home() {
             <div className="prog-bar"><div className="prog-fill mp" style={{width:`${(progressMP.current/progressMP.total)*100}%`}}/></div>
           </div>
         )}
- 
+
         {!processingMP && mpTotal > 0 && !processing && (
           <div style={{fontSize:12, color:'#5B2ED8', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
             ✓ Mercado Público: {mpDone}/{mpTotal} consultadas
           </div>
         )}
- 
+
         {results.length > 0 && (
           <>
             {okResults.length > 0 && (
@@ -546,18 +521,18 @@ export default function Home() {
                           {mp?.error && (
                             <div style={{display:'flex',flexDirection:'column',gap:4}}>
                               <span className="mp-err">Error: {mp.error}</span>
-                              <button className="btn-mp" onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
+                              <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
                             </div>
                           )}
                           {!mp && !processingMP && (
-                            <button className="btn-mp" onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔍 Buscar</button>
+                            <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔍 Buscar</button>
                           )}
                           {mp?.data && !mp.loading && (
                             <div>
                               {!mp.data.licitacion && !mp.data.org && (
                                 <div style={{display:'flex',flexDirection:'column',gap:4}}>
                                   <span className="mp-none">No encontrado en MP</span>
-                                  <button className="btn-mp" onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
+                                  <button onClick={() => consultarMP(i, r.data.rut_deudor, r.data.razon_social_deudor, r.data.ref_oc, r.data.ref_presupuesto, r.data.ref_edp)}>🔄 Reintentar</button>
                                 </div>
                               )}
                               {lit ? (
@@ -601,7 +576,7 @@ export default function Home() {
             </div>
           </>
         )}
- 
+
         <div className="footer"><a href="https://www.vantrustcapital.cl" target="_blank">vantrustcapital.cl</a></div>
       </div>
     </>
