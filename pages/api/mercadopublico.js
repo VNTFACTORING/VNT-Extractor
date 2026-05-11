@@ -113,6 +113,8 @@ async function buscarDesdeOC(ref) {
 
 async function guardarEnSupabase(licitacion, folio, rut_deudor) {
   try {
+    console.log('DEBUG guardar:', { folio, rut_deudor, organismo: licitacion?.organismo });
+
     if (!licitacion || !licitacion.rut_organismo || !licitacion.organismo) return;
 
     const rut = licitacion.rut_organismo.toString().trim();
@@ -140,7 +142,6 @@ async function guardarEnSupabase(licitacion, folio, rut_deudor) {
                           licitacion.responsable_contrato || licitacion.email_contrato;
     if (!tieneContacto) return;
 
-    // Verificar si ya existe este contacto para este folio y unidad
     if (folio) {
       const { data: existe } = await supabase
         .from('contactos')
@@ -149,7 +150,10 @@ async function guardarEnSupabase(licitacion, folio, rut_deudor) {
         .eq('folio_factura', folio)
         .limit(1)
 
-      if (existe && existe.length > 0) return;
+      if (existe && existe.length > 0) {
+        console.log('DEBUG: ya existe contacto para folio', folio);
+        return;
+      }
     }
 
     await supabase.from('contactos').insert({
@@ -165,6 +169,8 @@ async function guardarEnSupabase(licitacion, folio, rut_deudor) {
       folio_factura:        folio || null,
       rut_deudor:           rut_deudor || null,
     });
+
+    console.log('DEBUG: guardado exitoso folio', folio, 'rut_deudor', rut_deudor);
 
   } catch (e) {
     console.error('Supabase save error:', e.message);
@@ -187,6 +193,8 @@ export default async function handler(req, res) {
     var ref_presupuesto = body.ref_presupuesto;
     var ref_edp = body.ref_edp;
     var folio = body.folio;
+
+    console.log('DEBUG body:', { folio, rut_deudor, razon_social_deudor });
 
     var refs = [ref_oc, ref_presupuesto, ref_edp].filter(function(x) { return !!x; });
     var licitacion = null;
