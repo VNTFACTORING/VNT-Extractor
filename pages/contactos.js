@@ -50,7 +50,7 @@ export default function Contactos() {
   }
 
   function exportarExcel() {
-    const rows = [['Organismo', 'RUT', 'Unidad', 'Resp. Pago', 'Email Pago', 'Resp. Contrato', 'Email Contrato', 'Fono', 'Ejecutivo Compras', 'Licitación', 'Código', 'Folio Factura', 'Fecha']]
+    const rows = [['Organismo', 'RUT Organismo', 'Unidad', 'Resp. Pago', 'Email Pago', 'Resp. Contrato', 'Email Contrato', 'Fono', 'Ejecutivo Compras', 'Licitación', 'Código', 'Folio Factura', 'RUT Deudor', 'Fecha']]
     resultados.forEach(org => {
       org.unidades.forEach(uni => {
         uni.contactos.forEach(c => {
@@ -60,7 +60,7 @@ export default function Contactos() {
             c.resp_contrato || '', c.email_contrato || '',
             c.fono_contrato || '', c.ejecutivo_compras || '',
             c.licitacion_origen || '', c.codigo_licitacion || '',
-            c.folio_factura || '',
+            c.folio_factura || '', c.rut_deudor || '',
             c.found_at ? new Date(c.found_at).toLocaleDateString('es-CL') : ''
           ])
         })
@@ -113,18 +113,12 @@ export default function Contactos() {
               placeholder="RUT, nombre de organismo o N° factura..."
               style={{ flex: 1, padding: '10px 16px', borderRadius: 8, border: '1px solid #DDE2EA', fontSize: 14, outline: 'none', fontFamily: 'inherit', background: '#fff', color: '#1A2B3C' }}
             />
-            <button
-              onClick={buscarEnBase}
-              disabled={cargando}
-              style={{ background: '#1A2B3C', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}
-            >
+            <button onClick={buscarEnBase} disabled={cargando}
+              style={{ background: '#1A2B3C', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
               {cargando ? 'Buscando...' : 'Buscar en base'}
             </button>
-            <button
-              onClick={buscarEnMP}
-              disabled={cargando}
-              style={{ background: '#2AADB8', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}
-            >
+            <button onClick={buscarEnMP} disabled={cargando}
+              style={{ background: '#2AADB8', color: '#fff', border: 'none', borderRadius: 8, padding: '10px 20px', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
               Buscar en MP
             </button>
           </div>
@@ -145,10 +139,8 @@ export default function Contactos() {
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
                 <span style={{ fontSize: 13, color: '#6B7A8D' }}>{resultados.length} organismo(s) encontrado(s)</span>
-                <button
-                  onClick={exportarExcel}
-                  style={{ background: '#217346', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}
-                >
+                <button onClick={exportarExcel}
+                  style={{ background: '#217346', color: '#fff', border: 'none', borderRadius: 8, padding: '8px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
                   ⬇ Exportar Excel
                 </button>
               </div>
@@ -190,11 +182,12 @@ export default function Contactos() {
                                 <div style={{ fontSize: 13, color: '#1A2B3C', fontWeight: 500, marginBottom: 8 }}>{c.ejecutivo_compras}</div>
                               </>
                             )}
-                            {(c.codigo_licitacion || c.folio_factura) && (
+                            {(c.codigo_licitacion || c.folio_factura || c.rut_deudor) && (
                               <>
                                 <div style={{ fontSize: 10, color: '#6B7A8D', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 3 }}>Origen</div>
-                                {c.folio_factura && <div style={{ fontSize: 12, color: '#1A2B3C' }}>Factura N° {c.folio_factura}</div>}
-                                {c.codigo_licitacion && <div style={{ fontSize: 11, color: '#7C3AED', fontFamily: 'monospace' }}>{c.codigo_licitacion}</div>}
+                                {c.folio_factura && <div style={{ fontSize: 12, color: '#1A2B3C', fontWeight: 500 }}>Factura N° {c.folio_factura}</div>}
+                                {c.rut_deudor && <div style={{ fontSize: 11, color: '#6B7A8D', marginTop: 1 }}>RUT deudor: {c.rut_deudor}</div>}
+                                {c.codigo_licitacion && <div style={{ fontSize: 11, color: '#7C3AED', fontFamily: 'monospace', marginTop: 1 }}>{c.codigo_licitacion}</div>}
                                 <div style={{ fontSize: 11, color: '#6B7A8D', marginTop: 2 }}>{c.found_at ? new Date(c.found_at).toLocaleDateString('es-CL') : ''}</div>
                               </>
                             )}
