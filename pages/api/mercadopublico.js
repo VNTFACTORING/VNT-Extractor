@@ -1,6 +1,8 @@
+import { supabase } from '../../lib/supabase'
+
 const TICKET = process.env.MERCADOPUBLICO_TICKET;
 const BASE = 'https://api.mercadopublico.cl/servicios/v1/Publico';
- 
+
 async function get(url) {
   try {
     const ctrl = new AbortController();
@@ -12,7 +14,7 @@ async function get(url) {
     return null;
   }
 }
- 
+
 async function fetchHtml(url) {
   try {
     const ctrl = new AbortController();
@@ -27,8 +29,7 @@ async function fetchHtml(url) {
     return null;
   }
 }
- 
-// Extrae emails y telefono desde el HTML de la ficha de licitacion
+
 function extractContactsFromHtml(html) {
   if (!html) return {};
   function val(id) {
@@ -44,12 +45,12 @@ function extractContactsFromHtml(html) {
     fono_contrato:        val('lblFicha7TelefonoResponsableContrato'),
   };
 }
- 
+
 async function getLicit(codigo) {
   var d = await get(BASE + '/Licitaciones.aspx?ticket=' + TICKET + '&codigo=' + encodeURIComponent(codigo));
   var l = d && d.Listado && d.Listado[0];
   if (!l) return null;
- 
+
   var result = {
     codigo:               l.CodigoExterno,
     nombre:               l.Nombre,
@@ -63,13 +64,11 @@ async function getLicit(codigo) {
     email_contrato:       l.EmailResponsableContrato ? l.EmailResponsableContrato.trim() : null,
     fono_contrato:        l.FonoResponsableContrato ? l.FonoResponsableContrato.trim() : null,
   };
- 
-  // Si faltan emails/fono, intentar obtenerlos desde la ficha web via UrlActa
+
   var needsWeb = !result.email_pago && !result.email_contrato && !result.fono_contrato;
   var urlActa = l.Adjudicacion && l.Adjudicacion.UrlActa ? l.Adjudicacion.UrlActa : null;
- 
+
   if (needsWeb && urlActa) {
-    // El token del UrlActa funciona para acceder a DetailsAcquisition con datos completos
     var fichaUrl = urlActa.replace(
       'StepsProcessAward/PreviewAwardAct.aspx',
       'DetailsAcquisition.aspx'
@@ -86,21 +85,21 @@ async function getLicit(codigo) {
                                     result.responsable_contrato = web.responsable_contrato;
     }
   }
- 
+
   return result;
 }
- 
+
 var sleep = function(ms) { return new Promise(function(r) { setTimeout(r, ms); }); };
- 
+
 async function buscarDesdeOC(ref) {
   var prefijo = ref.split('-')[0];
   var m = ref.match(/(\d{2})$/);
   var anio = m ? m[1] : null;
   if (!prefijo || !anio) return null;
- 
+
   var sufijos = ['LE', 'LP', 'CO', 'O1'];
   var fallback = null;
- 
+
   for (var si = 0; si < sufijos.length; si++) {
     for (var n = 1; n <= 5; n++) {
       await sleep(300);
@@ -111,7 +110,60 @@ async function buscarDesdeOC(ref) {
   }
   return fallback;
 }
- 
+
+// Guarda contactos en Supabase de forma silenciosa (no bloquea la respuesta)
+async function guardarEnSupabase(licitacion) {
+  try {
+    if (!licitacion || !licitacion.rut_organismo || !licitacion.organismo) return;
+
+    const rut = licitacion.rut_organismo.toString().trim();
+    const nombre_organismo = licitacion.organismo.trim();
+    const nombre_unidad = licitacion.unidad || 'Sin unidad';
+
+    // Upsert organismo
+    const { data: organismo, error: errOrg } = await supabase
+      .from('organismos')
+      .upsert({ rut, nombre: nombre_organismo }, { onConflict: 'rut' })
+      .select()
+      .single();
+
+    if (errOrg || !organismo) return;
+
+    // Upsert unidad
+    const { data: unidad, error: errUni } = await supabase
+      .from('unidades')
+      .upsert(
+        { organismo_id: organismo.id, nombre: nombre_unidad },
+        { onConflict: 'organismo_id,nombre' }
+      )
+      .select()
+      .single();
+
+    if (errUni || !unidad) return;
+
+    // Solo guardar si hay al menos un dato de contacto útil
+    const tieneContacto = licitacion.responsable_pago || licitacion.email_pago ||
+                          licitacion.responsable_contrato || licitacion.email_contrato;
+    if (!tieneContacto) return;
+
+    await supabase.from('contactos').insert({
+      unidad_id:            unidad.id,
+      resp_pago:            licitacion.responsable_pago || null,
+      email_pago:           licitacion.email_pago || null,
+      resp_contrato:        licitacion.responsable_contrato || null,
+      email_contrato:       licitacion.email_contrato || null,
+      fono_contrato:        licitacion.fono_contrato || null,
+      ejecutivo_compras:    licitacion.ejecutivo_compras || null,
+      licitacion_origen:    licitacion.nombre || null,
+      codigo_licitacion:    licitacion.codigo || null,
+    });
+
+  } catch (e) {
+    // Silencioso — no interrumpe el flujo principal
+    console.error('Supabase save error:', e.message);
+  }
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -120,18 +172,18 @@ export default async function handler(req, res) {
     if (!TICKET) {
       return res.status(500).json({ error: 'MERCADOPUBLICO_TICKET no configurado' });
     }
- 
+
     var body = req.body || {};
     var razon_social_deudor = body.razon_social_deudor;
     var rut_deudor = body.rut_deudor;
     var ref_oc = body.ref_oc;
     var ref_presupuesto = body.ref_presupuesto;
     var ref_edp = body.ref_edp;
- 
+
     var refs = [ref_oc, ref_presupuesto, ref_edp].filter(function(x) { return !!x; });
     var licitacion = null;
     var org = null;
- 
+
     // RUTA A: referencia ya es codigo de licitacion
     for (var i = 0; i < refs.length; i++) {
       if (!/^\d+-\d+-(LE|LP|LQ|CO|O1|AG)\d{2}$/i.test(refs[i])) continue;
@@ -139,7 +191,7 @@ export default async function handler(req, res) {
       if (d) { licitacion = d; break; }
       await sleep(300);
     }
- 
+
     // RUTA B: buscar por prefijo OC
     if (!licitacion && refs.length > 0) {
       for (var j = 0; j < refs.length; j++) {
@@ -147,13 +199,13 @@ export default async function handler(req, res) {
         if (d2) { licitacion = d2; break; }
       }
     }
- 
+
     // RUTA C: buscar organismo por nombre
     if (!licitacion) {
       await sleep(300);
       var comp = await get(BASE + '/Empresas/BuscarComprador?ticket=' + TICKET);
       var lista = comp && comp.listaEmpresas ? comp.listaEmpresas : [];
- 
+
       function norm(s) {
         return (s || '').toUpperCase()
           .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -165,7 +217,7 @@ export default async function handler(req, res) {
         || lista.find(function(e) {
           return words.slice(0,3).every(function(w) { return norm(e.NombreEmpresa).indexOf(w) >= 0; });
         });
- 
+
       if (match) {
         org = { nombre: match.NombreEmpresa, codigo: match.CodigoEmpresa };
         await sleep(300);
@@ -190,18 +242,23 @@ export default async function handler(req, res) {
         if (empresa) org = { nombre: empresa.NombreEmpresa, codigo: empresa.CodigoEmpresa };
       }
     }
- 
+
     if (!org && licitacion && licitacion.organismo) {
       org = { nombre: licitacion.organismo };
     }
- 
+
+    // Guardar en Supabase de forma silenciosa
+    if (licitacion) {
+      guardarEnSupabase(licitacion);
+    }
+
     return res.status(200).json({ org: org, licitacion: licitacion });
- 
+
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 }
- 
+
 export const config = {
   api: { bodyParser: { sizeLimit: '1mb' } },
 };
