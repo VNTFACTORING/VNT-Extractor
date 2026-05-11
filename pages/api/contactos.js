@@ -48,7 +48,6 @@ export default async function handler(req, res) {
       let data, error
 
       if (esNumero) {
-        // Buscar por folio de factura
         const { data: porFolio, error: errFolio } = await supabase
           .from('contactos')
           .select('unidad_id, unidades(organismo_id)')
@@ -68,7 +67,6 @@ export default async function handler(req, res) {
           data = result.data
           error = result.error
         } else {
-          // No hay folio, intentar como RUT numérico
           const result = await supabase
             .from('organismos')
             .select(SELECT)
@@ -78,16 +76,15 @@ export default async function handler(req, res) {
           error = result.error
         }
       } else if (esRut) {
-        // Buscar por RUT con guión
+        const rutNorm = q.trim().replace(/\./g, '')
         const result = await supabase
           .from('organismos')
           .select(SELECT)
-          .ilike('rut', `%${q.replace(/\./g, '')}%`)
+          .ilike('rut', `%${rutNorm}%`)
           .limit(10)
         data = result.data
         error = result.error
       } else {
-        // Buscar por nombre
         const result = await supabase
           .from('organismos')
           .select(SELECT)
