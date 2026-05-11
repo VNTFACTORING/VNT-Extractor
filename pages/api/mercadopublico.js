@@ -111,8 +111,7 @@ async function buscarDesdeOC(ref) {
   return fallback;
 }
 
-// Guarda contactos en Supabase de forma silenciosa (no bloquea la respuesta)
-async function guardarEnSupabase(licitacion) {
+async function guardarEnSupabase(licitacion, folio) {
   try {
     if (!licitacion || !licitacion.rut_organismo || !licitacion.organismo) return;
 
@@ -120,7 +119,6 @@ async function guardarEnSupabase(licitacion) {
     const nombre_organismo = licitacion.organismo.trim();
     const nombre_unidad = licitacion.unidad || 'Sin unidad';
 
-    // Upsert organismo
     const { data: organismo, error: errOrg } = await supabase
       .from('organismos')
       .upsert({ rut, nombre: nombre_organismo }, { onConflict: 'rut' })
@@ -129,7 +127,6 @@ async function guardarEnSupabase(licitacion) {
 
     if (errOrg || !organismo) return;
 
-    // Upsert unidad
     const { data: unidad, error: errUni } = await supabase
       .from('unidades')
       .upsert(
@@ -141,7 +138,6 @@ async function guardarEnSupabase(licitacion) {
 
     if (errUni || !unidad) return;
 
-    // Solo guardar si hay al menos un dato de contacto útil
     const tieneContacto = licitacion.responsable_pago || licitacion.email_pago ||
                           licitacion.responsable_contrato || licitacion.email_contrato;
     if (!tieneContacto) return;
@@ -156,10 +152,10 @@ async function guardarEnSupabase(licitacion) {
       ejecutivo_compras:    licitacion.ejecutivo_compras || null,
       licitacion_origen:    licitacion.nombre || null,
       codigo_licitacion:    licitacion.codigo || null,
+      folio_factura:        folio || null,
     });
 
   } catch (e) {
-    // Silencioso — no interrumpe el flujo principal
     console.error('Supabase save error:', e.message);
   }
 }
@@ -179,12 +175,12 @@ export default async function handler(req, res) {
     var ref_oc = body.ref_oc;
     var ref_presupuesto = body.ref_presupuesto;
     var ref_edp = body.ref_edp;
+    var folio = body.folio;
 
     var refs = [ref_oc, ref_presupuesto, ref_edp].filter(function(x) { return !!x; });
     var licitacion = null;
     var org = null;
 
-    // RUTA A: referencia ya es codigo de licitacion
     for (var i = 0; i < refs.length; i++) {
       if (!/^\d+-\d+-(LE|LP|LQ|CO|O1|AG)\d{2}$/i.test(refs[i])) continue;
       var d = await getLicit(refs[i]);
@@ -192,7 +188,6 @@ export default async function handler(req, res) {
       await sleep(300);
     }
 
-    // RUTA B: buscar por prefijo OC
     if (!licitacion && refs.length > 0) {
       for (var j = 0; j < refs.length; j++) {
         var d2 = await buscarDesdeOC(refs[j]);
@@ -200,7 +195,6 @@ export default async function handler(req, res) {
       }
     }
 
-    // RUTA C: buscar organismo por nombre
     if (!licitacion) {
       await sleep(300);
       var comp = await get(BASE + '/Empresas/BuscarComprador?ticket=' + TICKET);
@@ -247,9 +241,8 @@ export default async function handler(req, res) {
       org = { nombre: licitacion.organismo };
     }
 
-    // Guardar en Supabase de forma silenciosa
     if (licitacion) {
-      guardarEnSupabase(licitacion);
+      guardarEnSupabase(licitacion, folio);
     }
 
     return res.status(200).json({ org: org, licitacion: licitacion });
