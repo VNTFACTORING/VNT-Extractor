@@ -91,13 +91,14 @@ export default function Home() {
       if (entry.dir) return;
       const nombre = ruta.split('/').pop();
       if (!nombre || nombre.startsWith('.')) return;
-      if (!esArchivoValido(nombre, '')) return; // ignorar silenciosamente no válidos
+      if (!esArchivoValido(nombre, '')) return;
       promesas.push(
         entry.async('blob').then(blob => {
           const ext  = nombre.toLowerCase().slice(nombre.lastIndexOf('.'));
-          const mime = ext === '.pdf' ? 'application/pdf'
-                     : ext === '.png' ? 'image/png'
-                     : 'image/jpeg';
+          const mime = ext === '.pdf'  ? 'application/pdf'
+                     : ext === '.png'  ? 'image/png'
+                     : ext === '.webp' ? 'image/webp'
+                     : 'image/jpeg'; // .jpg y .jpeg
           archivos.push(new File([blob], nombre, { type: mime }));
         })
       );
@@ -186,10 +187,18 @@ export default function Home() {
       setStatuses(prev => ({ ...prev, [i]: 'processing' }));
       try {
         const b64 = await toB64(files[i]);
+        // Detectar MIME por extensión — el type del File puede venir vacío desde ZIP
+        const ext = files[i].name.toLowerCase().slice(files[i].name.lastIndexOf('.'));
+        const mimeType = ext === '.pdf'  ? 'application/pdf'
+                       : ext === '.png'  ? 'image/png'
+                       : ext === '.webp' ? 'image/webp'
+                       : files[i].type && files[i].type !== 'application/octet-stream'
+                         ? files[i].type
+                         : 'image/jpeg';
         const res = await fetch('/api/extract', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileData: b64, mimeType: files[i].type || 'application/pdf' })
+          body: JSON.stringify({ fileData: b64, mimeType })
         });
         if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || 'Error ' + res.status); }
         const data = await res.json();
@@ -668,4 +677,3 @@ export default function Home() {
     </>
   );
 }
- 
