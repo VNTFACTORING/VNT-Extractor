@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
+import JSZip from 'jszip';
  
 export default function Home() {
   const [files, setFiles] = useState([]);
@@ -83,8 +84,7 @@ export default function Home() {
  
   // ── Descomprime un ZIP y retorna los archivos válidos como File objects ──
   async function expandirZip(zipFile) {
-    const JSZip = (await import('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js')).default;
-    const zip   = await JSZip.loadAsync(zipFile);
+    const zip = await JSZip.loadAsync(zipFile);
     const archivos = [];
     const promesas = [];
     zip.forEach((ruta, entry) => {
