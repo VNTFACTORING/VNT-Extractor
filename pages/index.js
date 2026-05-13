@@ -50,15 +50,78 @@ export default function Home() {
     return calculada || data.fecha_vencimiento || data.fecha_emision || '';
   }
  
-  function addFiles(newFiles) {
-    setFiles(prev => {
-      const existing = new Set(prev.map(f => f.name + f.size));
-      return [...prev, ...[...newFiles].filter(f => !existing.has(f.name + f.size))];
-    });
+  async function addFiles(newFiles) {
+    const existing = new Set(files.map(f => f.name + f.size));
+    let expandidos = [];
+    for (const f of [...newFiles]) {
+      const esZip = f.type === 'application/zip' || f.type === 'application/x-zip-compressed' || f.name.toLowerCase().endsWith('.zip');
+      if (esZip) {
+        try {
+          const dentro = await expandirZip(f);
+          expandidos.push(...dentro);
+        } catch {
+          // ZIP inválido — ignorar silenciosamente
+        }
+      } else if (esArchivoValido(f.name, f.type)) {
+        expandidos.push(f);
+      }
+    }
+    const nuevos = expandidos.filter(f => !existing.has(f.name + f.size));
+    setFiles(prev => [...prev, ...nuevos]);
     setResults([]); setStatuses({}); setMpData({});
   }
  
-  function removeFile(i) { setFiles(prev => prev.filter((_, idx) => idx !== i)); }
+  // ── Tipos de archivo permitidos dentro de ZIP ────────────────────────────
+  const TIPOS_VALIDOS = ['application/pdf','image/png','image/jpeg','image/webp'];
+  const EXT_VALIDAS   = ['.pdf','.png','.jpg','.jpeg','.webp'];
+ 
+  function esArchivoValido(nombre, tipo) {
+    if (tipo && TIPOS_VALIDOS.includes(tipo)) return true;
+    const ext = nombre.toLowerCase().slice(nombre.lastIndexOf('.'));
+    return EXT_VALIDAS.includes(ext);
+  }
+ 
+  // ── Descomprime un ZIP y retorna los archivos válidos como File objects ──
+  async function expandirZip(zipFile) {
+    const JSZip = (await import('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js')).default;
+    const zip   = await JSZip.loadAsync(zipFile);
+    const archivos = [];
+    const promesas = [];
+    zip.forEach((ruta, entry) => {
+      if (entry.dir) return;
+      const nombre = ruta.split('/').pop();
+      if (!nombre || nombre.startsWith('.')) return;
+      if (!esArchivoValido(nombre, '')) return; // ignorar silenciosamente no válidos
+      promesas.push(
+        entry.async('blob').then(blob => {
+          const ext  = nombre.toLowerCase().slice(nombre.lastIndexOf('.'));
+          const mime = ext === '.pdf' ? 'application/pdf'
+                     : ext === '.png' ? 'image/png'
+                     : 'image/jpeg';
+          archivos.push(new File([blob], nombre, { type: mime }));
+        })
+      );
+    });
+    await Promise.all(promesas);
+    return archivos;
+  }
+ 
+  // ── Detecta duplicados en allResults (mismo folio + rut_deudor) ──────────
+  function marcarDuplicados(allResults) {
+    const vistos = new Map();
+    return allResults.map(r => {
+      if (!r.ok) return r;
+      const key = `${(r.data.numero_folio||'').trim()}__${(r.data.rut_deudor||'').trim()}`;
+      if (!key || key === '__') return r;
+      if (vistos.has(key)) {
+        return { ...r, duplicado: true, duplicadoDe: vistos.get(key) };
+      }
+      vistos.set(key, r.filename);
+      return r;
+    });
+  }
+ 
+ 
  
   function clearAll() {
     setFiles([]); setResults([]); setStatuses({});
@@ -140,9 +203,10 @@ export default function Home() {
       }
       if (i < files.length - 1) await sleep(2500);
     }
-    setResults(allResults);
+    const resultadosFinal = marcarDuplicados(allResults);
+    setResults(resultadosFinal);
     setProcessing(false);
-    await consultarMPTodas(allResults);
+    await consultarMPTodas(resultadosFinal);
   }
  
   function fmt(v, money) {
@@ -163,9 +227,7 @@ export default function Home() {
       alert('Debes configurar los días de vencimiento antes de exportar.');
       return;
     }
-    const ok = results.filter(r => r.ok);
-    if (!ok.length) return;
-    const hdr = ['RUTconGuión','RazonSocial','MontoDocto','FechaVenc','NumDocto'];
+    const ok = results.filter(r => r.ok && !r.duplicado);
     const rows = ok.map(r => {
       const d = r.data;
       const venc = toDateGVE(getVencimiento(d));
@@ -177,7 +239,7 @@ export default function Home() {
   }
  
   function exportCompleto() {
-    const ok = results.filter(r => r.ok);
+    const ok = results.filter(r => r.ok && !r.duplicado);
     if (!ok.length) return;
     const hdr = ['Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Total','N° OC','N° Presupuesto','N° EDP','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
     const rows = ok.map((r, i) => {
@@ -206,7 +268,7 @@ export default function Home() {
       .catch(()=>alert('No se pudo copiar.'));
   }
  
-  const okResults = results.filter(r => r.ok);
+  const okResults = results.filter(r => r.ok && !r.duplicado);
   const totalNeto = okResults.reduce((s, r) => s + (r.data.monto_neto || 0), 0);
   const totalFinal = okResults.reduce((s, r) => s + (r.data.total || 0), 0);
   const mpDone = Object.values(mpData).filter(m => !m.loading).length;
@@ -337,6 +399,8 @@ export default function Home() {
         .mp-none { font-size:11px; color:#DDE2EA; }
         .mp-nota { font-size:10px; color:#A67700; margin-top:3px; font-style:italic; }
         .mp-err { font-size:11px; color:#C00000; }
+        .dup-row { background:#FFF5F5 !important; }
+        .dup-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; background:#FFF0F0; color:#C00000; font-size:11px; font-weight:700; border:1px solid #FFCDD2; border-radius:20px; }
         .btn-oc { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; background:#E6F7F9; color:#1F8A94; font-size:11px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #2AADB8; border-radius:6px; cursor:pointer; text-decoration:none; white-space:nowrap; }
         .btn-oc:hover { background:#2AADB8; color:#fff; }
         .footer { text-align:center; padding:2rem 0 1rem; font-size:11px; color:#6B7A8D; }
@@ -357,7 +421,7 @@ export default function Home() {
       </div>
  
       <div className="page">
-        <input ref={inputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
+        <input ref={inputRef} type="file" accept=".pdf,.zip,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
           onChange={e => { addFiles(e.target.files); e.target.value=''; }} />
  
         <div className="venc-panel">
@@ -408,7 +472,7 @@ export default function Home() {
           <div className="drop-icon">{files.length ? '📂' : '📄'}</div>
           <div className="drop-title">{files.length ? `${files.length} factura${files.length>1?'s':''} lista${files.length>1?'s':''}` : 'Arrastra las facturas aquí'}</div>
           <div className="drop-sub">{files.length ? 'Clic para agregar más archivos' : 'Puedes subir varias a la vez · PDF o imagen'}</div>
-          <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">Múltiples archivos</span></div>
+          <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">ZIP</span><span className="fmt">Múltiples archivos</span></div>
         </div>
  
         {files.length > 0 && (
@@ -506,9 +570,16 @@ export default function Home() {
                     const mp = mpData[i];
                     const lit = mp?.data?.licitacion;
                     return r.ok ? (
-                      <tr key={i}>
+                      <tr key={i} className={r.duplicado ? 'dup-row' : ''}>
                         <td>{fmt(r.data.tipo_documento)}</td>
-                        <td style={{fontWeight:600}}>{fmt(r.data.numero_folio)}</td>
+                        <td style={{fontWeight:600}}>
+                          {fmt(r.data.numero_folio)}
+                          {r.duplicado && (
+                            <div style={{marginTop:4}}>
+                              <span className="dup-badge">⚠ Duplicado de {r.duplicadoDe}</span>
+                            </div>
+                          )}
+                        </td>
                         <td className={r.data.confianza?.rut_emisor==='baja'?'conf-baja':''}>{fmt(r.data.rut_emisor)}</td>
                         <td>{fmt(r.data.razon_social_emisor)}</td>
                         <td className={r.data.confianza?.rut_deudor==='baja'?'conf-baja':''}>{fmt(r.data.rut_deudor)}</td>
