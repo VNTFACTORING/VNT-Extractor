@@ -1,7 +1,6 @@
 import { useState, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-import JSZip from 'jszip';
  
 export default function Home() {
   const [files, setFiles] = useState([]);
@@ -51,60 +50,12 @@ export default function Home() {
     return calculada || data.fecha_vencimiento || data.fecha_emision || '';
   }
  
-  async function addFiles(newFiles) {
-    const existing = new Set(files.map(f => f.name + f.size));
-    let expandidos = [];
-    for (const f of [...newFiles]) {
-      const esZip = f.type === 'application/zip' || f.type === 'application/x-zip-compressed' || f.name.toLowerCase().endsWith('.zip');
-      if (esZip) {
-        try {
-          const dentro = await expandirZip(f);
-          expandidos.push(...dentro);
-        } catch {
-          // ZIP inválido — ignorar silenciosamente
-        }
-      } else if (esArchivoValido(f.name, f.type)) {
-        expandidos.push(f);
-      }
-    }
-    const nuevos = expandidos.filter(f => !existing.has(f.name + f.size));
-    setFiles(prev => [...prev, ...nuevos]);
-    setResults([]); setStatuses({}); setMpData({});
-  }
- 
-  // ── Tipos de archivo permitidos dentro de ZIP ────────────────────────────
-  const TIPOS_VALIDOS = ['application/pdf','image/png','image/jpeg','image/webp'];
-  const EXT_VALIDAS   = ['.pdf','.png','.jpg','.jpeg','.webp'];
- 
-  function esArchivoValido(nombre, tipo) {
-    if (tipo && TIPOS_VALIDOS.includes(tipo)) return true;
-    const ext = nombre.toLowerCase().slice(nombre.lastIndexOf('.'));
-    return EXT_VALIDAS.includes(ext);
-  }
- 
-  // ── Descomprime un ZIP y retorna los archivos válidos como File objects ──
-  async function expandirZip(zipFile) {
-    const zip = await JSZip.loadAsync(zipFile);
-    const archivos = [];
-    const promesas = [];
-    zip.forEach((ruta, entry) => {
-      if (entry.dir) return;
-      const nombre = ruta.split('/').pop();
-      if (!nombre || nombre.startsWith('.')) return;
-      if (!esArchivoValido(nombre, '')) return;
-      promesas.push(
-        entry.async('blob').then(blob => {
-          const ext  = nombre.toLowerCase().slice(nombre.lastIndexOf('.'));
-          const mime = ext === '.pdf'  ? 'application/pdf'
-                     : ext === '.png'  ? 'image/png'
-                     : ext === '.webp' ? 'image/webp'
-                     : 'image/jpeg'; // .jpg y .jpeg
-          archivos.push(new File([blob], nombre, { type: mime }));
-        })
-      );
+  function addFiles(newFiles) {
+    setFiles(prev => {
+      const existing = new Set(prev.map(f => f.name + f.size));
+      return [...prev, ...[...newFiles].filter(f => !existing.has(f.name + f.size))];
     });
-    await Promise.all(promesas);
-    return archivos;
+    setResults([]); setStatuses({}); setMpData({});
   }
  
   // ── Detecta duplicados en allResults (mismo folio + rut_deudor) ──────────
@@ -187,18 +138,10 @@ export default function Home() {
       setStatuses(prev => ({ ...prev, [i]: 'processing' }));
       try {
         const b64 = await toB64(files[i]);
-        // Detectar MIME por extensión — el type del File puede venir vacío desde ZIP
-        const ext = files[i].name.toLowerCase().slice(files[i].name.lastIndexOf('.'));
-        const mimeType = ext === '.pdf'  ? 'application/pdf'
-                       : ext === '.png'  ? 'image/png'
-                       : ext === '.webp' ? 'image/webp'
-                       : files[i].type && files[i].type !== 'application/octet-stream'
-                         ? files[i].type
-                         : 'image/jpeg';
         const res = await fetch('/api/extract', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileData: b64, mimeType })
+          body: JSON.stringify({ fileData: b64, mimeType: files[i].type || 'application/pdf' })
         });
         if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.error || 'Error ' + res.status); }
         const data = await res.json();
@@ -430,7 +373,7 @@ export default function Home() {
       </div>
  
       <div className="page">
-        <input ref={inputRef} type="file" accept=".pdf,.zip,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
+        <input ref={inputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
           onChange={e => { addFiles(e.target.files); e.target.value=''; }} />
  
         <div className="venc-panel">
@@ -481,7 +424,7 @@ export default function Home() {
           <div className="drop-icon">{files.length ? '📂' : '📄'}</div>
           <div className="drop-title">{files.length ? `${files.length} factura${files.length>1?'s':''} lista${files.length>1?'s':''}` : 'Arrastra las facturas aquí'}</div>
           <div className="drop-sub">{files.length ? 'Clic para agregar más archivos' : 'Puedes subir varias a la vez · PDF o imagen'}</div>
-          <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">ZIP</span><span className="fmt">Múltiples archivos</span></div>
+          <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">Múltiples archivos</span></div>
         </div>
  
         {files.length > 0 && (
