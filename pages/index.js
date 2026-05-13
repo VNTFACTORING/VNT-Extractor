@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
-
+ 
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [results, setResults] = useState([]);
@@ -13,19 +13,19 @@ export default function Home() {
   const [mpData, setMpData] = useState({});
   const [over, setOver] = useState(false);
   const inputRef = useRef();
-
+ 
   const [vencDias, setVencDias] = useState('30');
   const [vencBase, setVencBase] = useState('hoy');
-
+ 
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
+ 
   function normalizeRut(rut) {
     if (!rut) return rut;
     let r = String(rut).trim().replace(/\./g, '').toUpperCase();
     if (!r.includes('-') && r.length > 1) r = r.slice(0, -1) + '-' + r.slice(-1);
     return r;
   }
-
+ 
   function calcularVencimiento(fechaEmision) {
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) return null;
@@ -44,12 +44,12 @@ export default function Home() {
     const y = base.getFullYear();
     return `${d}/${m}/${y}`;
   }
-
+ 
   function getVencimiento(data) {
     const calculada = calcularVencimiento(data.fecha_emision);
     return calculada || data.fecha_vencimiento || data.fecha_emision || '';
   }
-
+ 
   function addFiles(newFiles) {
     setFiles(prev => {
       const existing = new Set(prev.map(f => f.name + f.size));
@@ -57,16 +57,16 @@ export default function Home() {
     });
     setResults([]); setStatuses({}); setMpData({});
   }
-
+ 
   function removeFile(i) { setFiles(prev => prev.filter((_, idx) => idx !== i)); }
-
+ 
   function clearAll() {
     setFiles([]); setResults([]); setStatuses({});
     setProgress({ current: 0, total: 0 });
     setProgressMP({ current: 0, total: 0 });
     setMpData({});
   }
-
+ 
   async function toB64(file) {
     return new Promise((res, rej) => {
       const r = new FileReader();
@@ -75,7 +75,7 @@ export default function Home() {
       r.readAsDataURL(file);
     });
   }
-
+ 
   async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp, folio) {
     try {
       const res = await fetch('/api/mercadopublico', {
@@ -89,7 +89,7 @@ export default function Home() {
       setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, error: e.message } }));
     }
   }
-
+ 
   async function consultarMPTodas(allResults) {
     const okRows = allResults.map((r, i) => ({ r, i })).filter(({ r }) => r.ok);
     if (!okRows.length) return;
@@ -106,7 +106,7 @@ export default function Home() {
     }
     setProcessingMP(false);
   }
-
+ 
   async function extract() {
     if (!files.length || processing) return;
     const dias = parseInt(vencDias, 10);
@@ -144,19 +144,19 @@ export default function Home() {
     setProcessing(false);
     await consultarMPTodas(allResults);
   }
-
+ 
   function fmt(v, money) {
     if (v === null || v === undefined) return '—';
     if (money) return '$\u00A0' + Number(v).toLocaleString('es-CL');
     return String(v);
   }
-
+ 
   function toDateGVE(fecha) {
     if (!fecha) return '';
     if (fecha.includes('/')) { const [dd, mm, yyyy] = fecha.split('/'); return `${yyyy}-${mm}-${dd}`; }
     return fecha;
   }
-
+ 
   function exportGVE() {
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) {
@@ -175,7 +175,7 @@ export default function Home() {
       .then(()=>alert('Copiado en formato GVE (Carga Masiva)'))
       .catch(()=>alert('No se pudo copiar automáticamente.'));
   }
-
+ 
   function exportCompleto() {
     const ok = results.filter(r => r.ok);
     if (!ok.length) return;
@@ -205,20 +205,20 @@ export default function Home() {
       .then(()=>alert('Copiado completo'))
       .catch(()=>alert('No se pudo copiar.'));
   }
-
+ 
   const okResults = results.filter(r => r.ok);
   const totalNeto = okResults.reduce((s, r) => s + (r.data.monto_neto || 0), 0);
   const totalFinal = okResults.reduce((s, r) => s + (r.data.total || 0), 0);
   const mpDone = Object.values(mpData).filter(m => !m.loading).length;
   const mpTotal = Object.keys(mpData).length;
-
+ 
   const statusLabel = { queue:'En cola', processing:'Procesando…', done:'✓ Listo', error:'Error' };
   const statusColor = { queue:'#6B7A8D', processing:'#1A6AB5', done:'#0A7055', error:'#C00000' };
   const statusBg   = { queue:'#F2F4F7', processing:'#E8F4FF', done:'#E1F5EE', error:'#FFF0F0' };
-
+ 
   const diasValido = !isNaN(parseInt(vencDias, 10)) && parseInt(vencDias, 10) > 0;
   const baseLabel = vencBase === 'hoy' ? 'fecha de hoy' : 'fecha de emisión';
-
+ 
   return (
     <>
       <Head>
@@ -337,11 +337,13 @@ export default function Home() {
         .mp-none { font-size:11px; color:#DDE2EA; }
         .mp-nota { font-size:10px; color:#A67700; margin-top:3px; font-style:italic; }
         .mp-err { font-size:11px; color:#C00000; }
+        .btn-oc { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; background:#E6F7F9; color:#1F8A94; font-size:11px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #2AADB8; border-radius:6px; cursor:pointer; text-decoration:none; white-space:nowrap; }
+        .btn-oc:hover { background:#2AADB8; color:#fff; }
         .footer { text-align:center; padding:2rem 0 1rem; font-size:11px; color:#6B7A8D; }
         .footer a { color:#2AADB8; text-decoration:none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} .venc-body{flex-direction:column;align-items:flex-start;} }
       `}</style>
-
+ 
       <div className="top">
         <div className="dots">
           <div className="dot dim"/><div className="dot"/><div className="dot dim"/>
@@ -353,11 +355,11 @@ export default function Home() {
         <Link href="/" className="nav-link active">Extractor</Link>
         <Link href="/contactos" className="nav-link">Contactos MP</Link>
       </div>
-
+ 
       <div className="page">
         <input ref={inputRef} type="file" accept=".pdf,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
           onChange={e => { addFiles(e.target.files); e.target.value=''; }} />
-
+ 
         <div className="venc-panel">
           <div className="venc-header">
             <span className="venc-title">📅 Fecha de vencimiento</span>
@@ -397,7 +399,7 @@ export default function Home() {
             )}
           </div>
         </div>
-
+ 
         <div className={`drop${files.length?' has':''}${over?' over':''}`}
           onClick={() => inputRef.current.click()}
           onDragOver={e => { e.preventDefault(); setOver(true); }}
@@ -408,7 +410,7 @@ export default function Home() {
           <div className="drop-sub">{files.length ? 'Clic para agregar más archivos' : 'Puedes subir varias a la vez · PDF o imagen'}</div>
           <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">Múltiples archivos</span></div>
         </div>
-
+ 
         {files.length > 0 && (
           <div className="queue-list">
             {files.map((f, i) => (
@@ -426,7 +428,7 @@ export default function Home() {
             ))}
           </div>
         )}
-
+ 
         {files.length > 0 && (
           <div className="actions">
             <button className="btn-main" onClick={extract} disabled={processing || processingMP}>
@@ -439,7 +441,7 @@ export default function Home() {
             {!processing && !processingMP && <button className="btn-sec" onClick={clearAll}>Limpiar</button>}
           </div>
         )}
-
+ 
         {processing && (
           <div className="prog">
             <div className="prog-label">
@@ -449,7 +451,7 @@ export default function Home() {
             <div className="prog-bar"><div className="prog-fill extract" style={{width:`${(progress.current/progress.total)*100}%`}}/></div>
           </div>
         )}
-
+ 
         {processingMP && (
           <div className="prog">
             <div className="prog-label">
@@ -459,13 +461,13 @@ export default function Home() {
             <div className="prog-bar"><div className="prog-fill mp" style={{width:`${(progressMP.current/progressMP.total)*100}%`}}/></div>
           </div>
         )}
-
+ 
         {!processingMP && mpTotal > 0 && !processing && (
           <div style={{fontSize:12, color:'#5B2ED8', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
             ✓ Mercado Público: {mpDone}/{mpTotal} consultadas
           </div>
         )}
-
+ 
         {results.length > 0 && (
           <>
             {okResults.length > 0 && (
@@ -495,6 +497,7 @@ export default function Home() {
                     <th className="venc-col">F. Venc. ({diasValido ? `+${vencDias}d` : '?'})</th>
                     <th className="gve">Total</th>
                     <th className="ref">N° OC</th><th className="ref">N° Presupuesto</th><th className="ref">N° EDP</th>
+                    <th className="ref">Ver OC</th>
                     <th className="mp">Responsable MP</th>
                   </tr>
                 </thead>
@@ -516,6 +519,18 @@ export default function Home() {
                         <td className={r.data.ref_oc?'ref-val':'empty-ref'}>{r.data.ref_oc||'—'}</td>
                         <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>{r.data.ref_presupuesto||'—'}</td>
                         <td className={r.data.ref_edp?'ref-val':'empty-ref'}>{r.data.ref_edp||'—'}</td>
+                        <td>
+                          {r.data.ref_oc ? (
+                            <a
+                              className="btn-oc"
+                              href={`https://www.mercadopublico.cl/PurchaseOrder/Modules/PO/DetailsPurchaseOrder.aspx?codigoOC=${encodeURIComponent(r.data.ref_oc)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              📄 Ver OC
+                            </a>
+                          ) : <span style={{color:'#DDE2EA'}}>—</span>}
+                        </td>
                         <td className="mp-cell">
                           {mp?.loading && <div className="mp-loading"><div className="mp-spinner"/>Consultando MP…</div>}
                           {mp?.error && (
@@ -567,7 +582,7 @@ export default function Home() {
                       </tr>
                     ) : (
                       <tr key={i}>
-                        <td colSpan={13} className="err-row">{r.filename} — Error: {r.error}</td>
+                        <td colSpan={14} className="err-row">{r.filename} — Error: {r.error}</td>
                       </tr>
                     );
                   })}
@@ -576,9 +591,10 @@ export default function Home() {
             </div>
           </>
         )}
-
+ 
         <div className="footer"><a href="https://www.vantrustcapital.cl" target="_blank">vantrustcapital.cl</a></div>
       </div>
     </>
   );
 }
+ 
