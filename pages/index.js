@@ -126,14 +126,20 @@ export default function Home() {
  
   // ── Vincula documentos de respaldo con sus facturas por codigo_respaldo ──
   function vincularRespaldos(allResults) {
-    // Separar facturas válidas y respaldos
-    const facturas = allResults.filter(r => r.ok && !r.data.tipo_invalido && !r.duplicado);
-    const respaldos = allResults.filter(r => r.ok && r.data.tipo_invalido && r.data.codigo_respaldo);
+    // Normaliza código para comparación — quita espacios extra y unifica separadores
+    function normCod(s) {
+      return (s || '').trim().toUpperCase()
+        .replace(/\s+/g, '-')   // espacios → guión
+        .replace(/-+/g, '-')    // múltiples guiones → uno
+        .replace(/[()]/g, '');  // quitar paréntesis
+    }
  
-    // Construir mapa de respaldos: codigo_respaldo → [filenames]
+    const respaldos = allResults.filter(r => r.ok && r.data?.tipo_invalido && r.data?.codigo_respaldo);
+ 
+    // Construir mapa de respaldos: codigo_normalizado → [filenames]
     const mapaRespaldos = new Map();
     respaldos.forEach(r => {
-      const cod = (r.data.codigo_respaldo || '').trim().toUpperCase();
+      const cod = normCod(r.data.codigo_respaldo);
       if (!cod) return;
       if (!mapaRespaldos.has(cod)) mapaRespaldos.set(cod, []);
       mapaRespaldos.get(cod).push(r.filename);
@@ -141,10 +147,10 @@ export default function Home() {
  
     // Marcar cada factura si tiene respaldo vinculado
     return allResults.map(r => {
-      if (!r.ok || r.data.tipo_invalido) return r;
-      const refOC  = (r.data.ref_oc  || '').trim().toUpperCase();
-      const refEDP = (r.data.ref_edp || '').trim().toUpperCase();
-      const refPre = (r.data.ref_presupuesto || '').trim().toUpperCase();
+      if (!r.ok || r.data?.tipo_invalido) return r;
+      const refOC  = normCod(r.data.ref_oc);
+      const refEDP = normCod(r.data.ref_edp);
+      const refPre = normCod(r.data.ref_presupuesto);
       const tieneRespaldo =
         (refOC  && mapaRespaldos.has(refOC))  ||
         (refEDP && mapaRespaldos.has(refEDP)) ||
@@ -163,6 +169,11 @@ export default function Home() {
     setProgress({ current: 0, total: 0 });
     setProgressMP({ current: 0, total: 0 });
     setMpData({});
+  }
+ 
+  function removeFile(i) {
+    setFiles(prev => prev.filter((_, idx) => idx !== i));
+    setResults([]); setStatuses({}); setMpData({});
   }
  
   async function toB64(file) {
@@ -537,7 +548,12 @@ export default function Home() {
                 <span className="qi-st" style={{background:statusBg[statuses[i]||'queue'], color:statusColor[statuses[i]||'queue']}}>
                   {statusLabel[statuses[i]||'queue']}
                 </span>
-                {!processing && !processingMP && <button className="qi-rm" onClick={() => removeFile(i)}>×</button>}
+                {!processing && !processingMP && (
+                  <button
+                    className="qi-rm"
+                    onClick={e => { e.stopPropagation(); removeFile(i); }}
+                  >×</button>
+                )}
               </div>
             ))}
           </div>
@@ -650,10 +666,32 @@ export default function Home() {
                             </span>
                           )}
                         </td>
-                        <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>{r.data.ref_presupuesto||'—'}</td>
-                        <td className={r.data.ref_edp?'ref-val':'empty-ref'}>{r.data.ref_edp||'—'}</td>
+                        <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>
+                          {r.data.ref_presupuesto || '—'}
+                          {r.data.ref_presupuesto && !r.data.ref_oc && (
+                            <span
+                              className={r.tieneRespaldo ? 'respaldo-ok' : 'respaldo-no'}
+                              title={r.tieneRespaldo ? `Respaldo: ${r.archivosRespaldo?.join(', ')}` : 'Sin respaldo adjunto'}
+                              style={{marginLeft:5}}
+                            >
+                              {r.tieneRespaldo ? '✅' : '❌'}
+                            </span>
+                          )}
+                        </td>
+                        <td className={r.data.ref_edp?'ref-val':'empty-ref'}>
+                          {r.data.ref_edp || '—'}
+                          {r.data.ref_edp && !r.data.ref_oc && !r.data.ref_presupuesto && (
+                            <span
+                              className={r.tieneRespaldo ? 'respaldo-ok' : 'respaldo-no'}
+                              title={r.tieneRespaldo ? `Respaldo: ${r.archivosRespaldo?.join(', ')}` : 'Sin respaldo adjunto'}
+                              style={{marginLeft:5}}
+                            >
+                              {r.tieneRespaldo ? '✅' : '❌'}
+                            </span>
+                          )}
+                        </td>
                         <td>
-                          {r.data.ref_oc ? (
+                          {r.data.ref_oc && /^\d+-\d+/i.test(r.data.ref_oc) ? (
                             <a
                               className="btn-oc"
                               href={`https://www.mercadopublico.cl/PurchaseOrder/Modules/PO/DetailsPurchaseOrder.aspx?codigoOC=${encodeURIComponent(r.data.ref_oc)}`}
