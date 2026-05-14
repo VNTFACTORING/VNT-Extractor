@@ -124,6 +124,40 @@ export default function Home() {
  
  
  
+  // ── Vincula documentos de respaldo con sus facturas por codigo_respaldo ──
+  function vincularRespaldos(allResults) {
+    // Separar facturas válidas y respaldos
+    const facturas = allResults.filter(r => r.ok && !r.data.tipo_invalido && !r.duplicado);
+    const respaldos = allResults.filter(r => r.ok && r.data.tipo_invalido && r.data.codigo_respaldo);
+ 
+    // Construir mapa de respaldos: codigo_respaldo → [filenames]
+    const mapaRespaldos = new Map();
+    respaldos.forEach(r => {
+      const cod = (r.data.codigo_respaldo || '').trim().toUpperCase();
+      if (!cod) return;
+      if (!mapaRespaldos.has(cod)) mapaRespaldos.set(cod, []);
+      mapaRespaldos.get(cod).push(r.filename);
+    });
+ 
+    // Marcar cada factura si tiene respaldo vinculado
+    return allResults.map(r => {
+      if (!r.ok || r.data.tipo_invalido) return r;
+      const refOC  = (r.data.ref_oc  || '').trim().toUpperCase();
+      const refEDP = (r.data.ref_edp || '').trim().toUpperCase();
+      const refPre = (r.data.ref_presupuesto || '').trim().toUpperCase();
+      const tieneRespaldo =
+        (refOC  && mapaRespaldos.has(refOC))  ||
+        (refEDP && mapaRespaldos.has(refEDP)) ||
+        (refPre && mapaRespaldos.has(refPre));
+      const archivosRespaldo = [
+        ...(refOC  && mapaRespaldos.has(refOC)  ? mapaRespaldos.get(refOC)  : []),
+        ...(refEDP && mapaRespaldos.has(refEDP) ? mapaRespaldos.get(refEDP) : []),
+        ...(refPre && mapaRespaldos.has(refPre) ? mapaRespaldos.get(refPre) : []),
+      ];
+      return { ...r, tieneRespaldo, archivosRespaldo };
+    });
+  }
+ 
   function clearAll() {
     setFiles([]); setResults([]); setStatuses({});
     setProgress({ current: 0, total: 0 });
@@ -211,10 +245,12 @@ export default function Home() {
       }
       if (i < files.length - 1) await sleep(2500);
     }
-    const resultadosFinal = marcarDuplicados(allResults);
+    const resultadosMarcados = marcarDuplicados(allResults);
+    const resultadosFinal = vincularRespaldos(resultadosMarcados);
     setResults(resultadosFinal);
     setProcessing(false);
-    await consultarMPTodas(resultadosFinal);
+    // Solo consultar MP para facturas válidas, no respaldos
+    await consultarMPTodas(resultadosFinal.filter(r => r.ok && !r.data.tipo_invalido && !r.duplicado));
   }
  
   function fmt(v, money) {
@@ -235,7 +271,9 @@ export default function Home() {
       alert('Debes configurar los días de vencimiento antes de exportar.');
       return;
     }
-    const ok = results.filter(r => r.ok && !r.duplicado);
+    const ok = results.filter(r => r.ok && !r.duplicado && !r.data?.tipo_invalido);
+    if (!ok.length) return;
+    const hdr = ['RUTconGuión','RazonSocial','MontoDocto','FechaVenc','NumDocto'];
     const rows = ok.map(r => {
       const d = r.data;
       const venc = toDateGVE(getVencimiento(d));
@@ -247,10 +285,12 @@ export default function Home() {
   }
  
   function exportCompleto() {
-    const ok = results.filter(r => r.ok && !r.duplicado);
+    const ok = results
+      .map((r, i) => ({ r, i }))
+      .filter(({ r }) => r.ok && !r.duplicado && !r.data?.tipo_invalido);
     if (!ok.length) return;
     const hdr = ['Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Total','N° OC','N° Presupuesto','N° EDP','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
-    const rows = ok.map((r, i) => {
+    const rows = ok.map(({ r, i }) => {
       const d = r.data;
       const mp = mpData[i]?.data;
       return [
@@ -276,7 +316,7 @@ export default function Home() {
       .catch(()=>alert('No se pudo copiar.'));
   }
  
-  const okResults = results.filter(r => r.ok && !r.duplicado);
+  const okResults = results.filter(r => r.ok && !r.duplicado && !r.data?.tipo_invalido);
   const totalNeto = okResults.reduce((s, r) => s + (r.data.monto_neto || 0), 0);
   const totalFinal = okResults.reduce((s, r) => s + (r.data.total || 0), 0);
   const mpDone = Object.values(mpData).filter(m => !m.loading).length;
@@ -409,6 +449,8 @@ export default function Home() {
         .mp-err { font-size:11px; color:#C00000; }
         .dup-row { background:#FFF5F5 !important; }
         .dup-badge { display:inline-flex; align-items:center; gap:5px; padding:3px 10px; background:#FFF0F0; color:#C00000; font-size:11px; font-weight:700; border:1px solid #FFCDD2; border-radius:20px; }
+        .respaldo-ok { font-size:13px; cursor:default; }
+        .respaldo-no { font-size:13px; cursor:default; opacity:.5; }
         .btn-oc { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; background:#E6F7F9; color:#1F8A94; font-size:11px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #2AADB8; border-radius:6px; cursor:pointer; text-decoration:none; white-space:nowrap; }
         .btn-oc:hover { background:#2AADB8; color:#fff; }
         .footer { text-align:center; padding:2rem 0 1rem; font-size:11px; color:#6B7A8D; }
@@ -575,6 +617,7 @@ export default function Home() {
                 </thead>
                 <tbody>
                   {results.map((r, i) => {
+                    if (r.data?.tipo_invalido) return null;
                     const mp = mpData[i];
                     const lit = mp?.data?.licitacion;
                     return r.ok ? (
@@ -595,7 +638,18 @@ export default function Home() {
                         <td>{fmt(r.data.fecha_emision)}</td>
                         <td className="venc-calc" style={{fontWeight:700}}>{diasValido ? fmt(getVencimiento(r.data)) : <span style={{color:'#DDE2EA'}}>—</span>}</td>
                         <td className="total-m">{fmt(r.data.total, true)}</td>
-                        <td className={r.data.ref_oc?'ref-val':'empty-ref'}>{r.data.ref_oc||'—'}</td>
+                        <td className={r.data.ref_oc?'ref-val':'empty-ref'}>
+                          {r.data.ref_oc || '—'}
+                          {r.data.ref_oc && (
+                            <span
+                              className={r.tieneRespaldo ? 'respaldo-ok' : 'respaldo-no'}
+                              title={r.tieneRespaldo ? `Respaldo: ${r.archivosRespaldo?.join(', ')}` : 'Sin respaldo adjunto'}
+                              style={{marginLeft:5}}
+                            >
+                              {r.tieneRespaldo ? '✅' : '❌'}
+                            </span>
+                          )}
+                        </td>
                         <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>{r.data.ref_presupuesto||'—'}</td>
                         <td className={r.data.ref_edp?'ref-val':'empty-ref'}>{r.data.ref_edp||'—'}</td>
                         <td>
