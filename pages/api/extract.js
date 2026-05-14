@@ -2,16 +2,18 @@
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
  
 // Prompt del sistema — estable, cacheable
-const SYSTEM_PROMPT = `Experto en documentos tributarios chilenos (facturas, EPA, notas de débito/crédito).
+const SYSTEM_PROMPT = `Experto en documentos tributarios chilenos.
  
-DOCUMENTOS VÁLIDOS — procesar normalmente:
-- Factura Electrónica, Factura No Electrónica
-- Nota de Débito, Nota de Crédito
-- Estado de Pago (EPA)
+PASO 1 — IDENTIFICAR TIPO DE DOCUMENTO:
+¿Es una Factura Electrónica, Factura No Electrónica, Nota de Débito, Nota de Crédito o Estado de Pago (EPA)?
+- SÍ → continuar al PASO 2
+- NO → responder INMEDIATAMENTE SOLO con esto y nada más:
+{"tipo_invalido":true,"tipo_documento":"[tipo exacto detectado]","codigo_respaldo":"[código/número principal del documento]"}
  
-DOCUMENTOS DE RESPALDO — si el documento es OC, EDP, Presupuesto, Cotización u otro, responder SOLO con:
-{"tipo_invalido":true,"tipo_documento":"[tipo detectado]","codigo_respaldo":"[número/código principal del documento]"}
-Ejemplos: OC → codigo_respaldo="3129-373-SE26", EDP → codigo_respaldo="6", Presupuesto → codigo_respaldo="11576"
+DOCUMENTOS QUE DEBEN DEVOLVER tipo_invalido=true (lista no exhaustiva):
+Orden de Compra, OC, Cotización, Presupuesto, Contrato, Boleta, Guía de Despacho, Acta, Resolución, Decreto, Convenio, Certificado, Informe, Estado de Pago (EDP como documento separado).
+ 
+PASO 2 — EXTRAER DATOS (solo para documentos válidos):
  
 EMISOR vs DEUDOR:
 - EMISOR: quien emite/cobra (proveedor, contratista). RUT del encabezado.
@@ -20,7 +22,6 @@ EMISOR vs DEUDOR:
 - Si hay duda, confianza="baja". NUNCA intercambiar.
  
 RUT: sin puntos, con guión y DV mayúscula. Ej: 76416753-8, 71918300-K.
- 
 VENCIMIENTO: buscar fecha explícita; si no hay, usar emisión. Formato DD/MM/YYYY.
  
 REFERENCIAS — extraer solo el código/número, sin labels:
@@ -110,8 +111,36 @@ export default async function handler(req, res) {
       .trim();
  
     try {
-      return res.status(200).json(JSON.parse(text));
-    } catch {
+      const parsed = JSON.parse(text);
+ 
+      // Filtro de seguridad — si Claude clasificó como documento de respaldo
+      // pero no devolvió tipo_invalido, forzarlo
+      if (!parsed.tipo_invalido && parsed.tipo_documento) {
+        const tipo = parsed.tipo_documento.toLowerCase();
+        const esRespaldo = ['orden de compra', 'orden compra', ' oc ', 'cotizacion', 'cotización',
+          'presupuesto', 'contrato', 'guia de despacho', 'guía de despacho',
+          'acta', 'resolucion', 'resolución', 'decreto', 'convenio', 'certificado'
+        ].some(t => tipo.includes(t));
+        if (esRespaldo) {
+          parsed.tipo_invalido = true;
+          parsed.codigo_respaldo = parsed.numero_folio || null;
+        }
+      }
+ 
+      return res.status(200).json(parsed);
+    } catch (parseErr) {
       return res.status(422).json({ error: 'Respuesta no es JSON válido', raw: text });
     }
+ 
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+ 
+export const config = {
+  api: {
+    bodyParser: { sizeLimit: '20mb' },
+    responseLimit: false,
+  }
+};
  
