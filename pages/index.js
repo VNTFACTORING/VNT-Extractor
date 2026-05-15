@@ -111,7 +111,7 @@ export default function Home() {
   function marcarDuplicados(allResults) {
     const vistos = new Map();
     return allResults.map(r => {
-      if (!r.ok) return r;
+      if (!r.ok || r.data?.tipo_invalido) return r;
       const key = `${(r.data.numero_folio||'').trim()}__${(r.data.rut_deudor||'').trim()}`;
       if (!key || key === '__') return r;
       if (vistos.has(key)) {
@@ -121,8 +121,6 @@ export default function Home() {
       return r;
     });
   }
- 
- 
  
   // ── Vincula documentos de respaldo con sus facturas por codigo_respaldo ──
   function vincularRespaldos(allResults) {
@@ -151,16 +149,20 @@ export default function Home() {
       const refOC  = normCod(r.data.ref_oc);
       const refEDP = normCod(r.data.ref_edp);
       const refPre = normCod(r.data.ref_presupuesto);
-      const tieneRespaldo =
-        (refOC  && mapaRespaldos.has(refOC))  ||
-        (refEDP && mapaRespaldos.has(refEDP)) ||
-        (refPre && mapaRespaldos.has(refPre));
-      const archivosRespaldo = [
-        ...(refOC  && mapaRespaldos.has(refOC)  ? mapaRespaldos.get(refOC)  : []),
-        ...(refEDP && mapaRespaldos.has(refEDP) ? mapaRespaldos.get(refEDP) : []),
-        ...(refPre && mapaRespaldos.has(refPre) ? mapaRespaldos.get(refPre) : []),
-      ];
-      return { ...r, tieneRespaldo, archivosRespaldo };
+      const refCon = normCod(r.data.ref_contrato);
+      const refNP  = normCod(r.data.ref_nota_pedido);
+      const refs   = [refOC, refEDP, refPre, refCon, refNP].filter(Boolean);
+      const tieneRespaldo = refs.some(ref => mapaRespaldos.has(ref));
+      const archivosRespaldo = refs.flatMap(ref => mapaRespaldos.get(ref) || []);
+      // Mapa por campo para saber cuál referencia específica tiene respaldo
+      const respaldoPorCampo = {
+        ref_oc:          refOC  && mapaRespaldos.has(refOC),
+        ref_edp:         refEDP && mapaRespaldos.has(refEDP),
+        ref_presupuesto: refPre && mapaRespaldos.has(refPre),
+        ref_contrato:    refCon && mapaRespaldos.has(refCon),
+        ref_nota_pedido: refNP  && mapaRespaldos.has(refNP),
+      };
+      return { ...r, tieneRespaldo, archivosRespaldo, respaldoPorCampo };
     });
   }
  
@@ -300,17 +302,23 @@ export default function Home() {
       .map((r, i) => ({ r, i }))
       .filter(({ r }) => r.ok && !r.duplicado && !r.data?.tipo_invalido);
     if (!ok.length) return;
-    const hdr = ['Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Total','N° OC','N° Presupuesto','N° EDP','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
+    const hdr = ['Tipo','Folio','RUT Emisor','Emisor','RUT Deudor','Deudor','F. Emisión','F. Venc.','Total','Referencias','Organismo MP','Licitación MP','Resp. Pago','Email Pago','Resp. Contrato','Email Contrato','Fono Contrato','Ejecutivo Compras','Unidad'];
     const rows = ok.map(({ r, i }) => {
       const d = r.data;
       const mp = mpData[i]?.data;
+      const refs = [
+        d.ref_oc           ? `OC: ${d.ref_oc}`         : null,
+        d.ref_presupuesto  ? `Pres: ${d.ref_presupuesto}` : null,
+        d.ref_edp          ? `EDP: ${d.ref_edp}`        : null,
+        d.ref_contrato     ? `Cont: ${d.ref_contrato}`  : null,
+        d.ref_nota_pedido  ? `NP: ${d.ref_nota_pedido}` : null,
+      ].filter(Boolean).join(' | ') || '—';
       return [
         d.tipo_documento||'', d.numero_folio||'',
         d.rut_emisor||'', d.razon_social_emisor||'',
         d.rut_deudor||'', d.razon_social_deudor||'',
         d.fecha_emision||'', getVencimiento(d),
-        d.total||'',
-        d.ref_oc||'', d.ref_presupuesto||'', d.ref_edp||'',
+        d.total||'', refs,
         mp?.licitacion?.organismo||mp?.org?.nombre||'',
         mp?.licitacion?.codigo||'',
         mp?.licitacion?.responsable_pago||'',
@@ -444,6 +452,7 @@ export default function Home() {
         .conf-baja { color:#C00000; font-weight:700; }
         .ref-val { font-weight:600; color:#A67700; }
         .empty-ref { color:#DDE2EA; }
+        .ref-cell { min-width:160px; vertical-align:top; }
         .venc-calc { font-weight:700; color:#1A6AB5; }
         .mp-cell { min-width:220px; font-family:'DM Sans',sans-serif; }
         .mp-loading { font-size:11px; color:#7C3AED; display:flex; align-items:center; gap:6px; }
@@ -626,7 +635,7 @@ export default function Home() {
                     <th>F. Emisión</th>
                     <th className="venc-col">F. Venc. ({diasValido ? `+${vencDias}d` : '?'})</th>
                     <th className="gve">Total</th>
-                    <th className="ref">N° OC</th><th className="ref">N° Presupuesto</th><th className="ref">N° EDP</th>
+                    <th className="ref">Referencias</th>
                     <th className="ref">Ver OC</th>
                     <th className="mp">Responsable MP</th>
                   </tr>
@@ -654,41 +663,30 @@ export default function Home() {
                         <td>{fmt(r.data.fecha_emision)}</td>
                         <td className="venc-calc" style={{fontWeight:700}}>{diasValido ? fmt(getVencimiento(r.data)) : <span style={{color:'#DDE2EA'}}>—</span>}</td>
                         <td className="total-m">{fmt(r.data.total, true)}</td>
-                        <td className={r.data.ref_oc?'ref-val':'empty-ref'}>
-                          {r.data.ref_oc || '—'}
-                          {r.data.ref_oc && (
-                            <span
-                              className={r.tieneRespaldo ? 'respaldo-ok' : 'respaldo-no'}
-                              title={r.tieneRespaldo ? `Respaldo: ${r.archivosRespaldo?.join(', ')}` : 'Sin respaldo adjunto'}
-                              style={{marginLeft:5}}
-                            >
-                              {r.tieneRespaldo ? '✅' : '❌'}
-                            </span>
-                          )}
-                        </td>
-                        <td className={r.data.ref_presupuesto?'ref-val':'empty-ref'}>
-                          {r.data.ref_presupuesto || '—'}
-                          {r.data.ref_presupuesto && !r.data.ref_oc && (
-                            <span
-                              className={r.tieneRespaldo ? 'respaldo-ok' : 'respaldo-no'}
-                              title={r.tieneRespaldo ? `Respaldo: ${r.archivosRespaldo?.join(', ')}` : 'Sin respaldo adjunto'}
-                              style={{marginLeft:5}}
-                            >
-                              {r.tieneRespaldo ? '✅' : '❌'}
-                            </span>
-                          )}
-                        </td>
-                        <td className={r.data.ref_edp?'ref-val':'empty-ref'}>
-                          {r.data.ref_edp || '—'}
-                          {r.data.ref_edp && !r.data.ref_oc && !r.data.ref_presupuesto && (
-                            <span
-                              className={r.tieneRespaldo ? 'respaldo-ok' : 'respaldo-no'}
-                              title={r.tieneRespaldo ? `Respaldo: ${r.archivosRespaldo?.join(', ')}` : 'Sin respaldo adjunto'}
-                              style={{marginLeft:5}}
-                            >
-                              {r.tieneRespaldo ? '✅' : '❌'}
-                            </span>
-                          )}
+                        <td className="ref-cell">
+                          {(() => {
+                            const refs = [
+                              { campo: 'ref_oc',          label: 'OC',   val: r.data.ref_oc },
+                              { campo: 'ref_presupuesto', label: 'Pres', val: r.data.ref_presupuesto },
+                              { campo: 'ref_edp',         label: 'EDP',  val: r.data.ref_edp },
+                              { campo: 'ref_contrato',    label: 'Cont', val: r.data.ref_contrato },
+                              { campo: 'ref_nota_pedido', label: 'NP',   val: r.data.ref_nota_pedido },
+                            ].filter(x => x.val);
+                            if (!refs.length) return <span style={{color:'#DDE2EA'}}>Sin referencia</span>;
+                            return refs.map((x, ri) => (
+                              <div key={ri} style={{marginBottom: ri < refs.length-1 ? 3 : 0}}>
+                                <span style={{color:'#6B7A8D', fontSize:10}}>{x.label}: </span>
+                                <span className="ref-val">{x.val}</span>
+                                {' '}
+                                <span
+                                  className={r.respaldoPorCampo?.[x.campo] ? 'respaldo-ok' : 'respaldo-no'}
+                                  title={r.respaldoPorCampo?.[x.campo] ? `Respaldo adjunto` : 'Sin respaldo adjunto'}
+                                >
+                                  {r.respaldoPorCampo?.[x.campo] ? '✅' : '❌'}
+                                </span>
+                              </div>
+                            ));
+                          })()}
                         </td>
                         <td>
                           {r.data.ref_oc && /^\d+-\d+/i.test(r.data.ref_oc) ? (
@@ -753,7 +751,7 @@ export default function Home() {
                       </tr>
                     ) : (
                       <tr key={i}>
-                        <td colSpan={14} className="err-row">{r.filename} — Error: {r.error}</td>
+                        <td colSpan={12} className="err-row">{r.filename} — Error: {r.error}</td>
                       </tr>
                     );
                   })}
