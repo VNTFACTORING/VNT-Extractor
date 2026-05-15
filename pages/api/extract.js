@@ -28,12 +28,13 @@ REFERENCIAS — extraer solo el código/número, sin labels. Buscar en sección 
 - ref_oc: labels "Orden de Compra", "OC", "O/C" → ej "5139-99-SE26"
 - ref_presupuesto: labels "Presupuesto", "Pres" → solo número
 - ref_edp: labels "Estado de Pago", "EDP", "EP" → solo número/id
+- ref_hes: labels "Hoja Entrada Servicio", "HES", "Entrada de Mercancía", "EM", "Vale de Entrada", "Entrada de mercancia" → ej "5000372384"
 - ref_contrato: labels "Contrato", "N° Contrato", "Nº Contrato", "Contrato N°", "CPS", "N° Servicio" → ej "CPS-N64-D08-25-010"
 - ref_nota_pedido: labels "Nota de Pedido", "NP", "N/P", "Pedido" → solo número/código
 Si no existe → null. Una factura puede tener múltiples referencias simultáneas.
  
 Responder SOLO JSON válido (sin markdown):
-{"tipo_documento":"","numero_folio":"","rut_emisor":"","razon_social_emisor":"","rut_deudor":"","razon_social_deudor":"","fecha_emision":"","fecha_vencimiento":"","monto_neto":0,"iva":0,"total":0,"ref_oc":"","ref_presupuesto":"","ref_edp":"","ref_contrato":"","ref_nota_pedido":"","confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
+{"tipo_documento":"","numero_folio":"","rut_emisor":"","razon_social_emisor":"","rut_deudor":"","razon_social_deudor":"","fecha_emision":"","fecha_vencimiento":"","monto_neto":0,"iva":0,"total":0,"ref_oc":"","ref_presupuesto":"","ref_edp":"","ref_hes":"","ref_contrato":"","ref_nota_pedido":"","confianza":{"rut_emisor":"alta|media|baja","rut_deudor":"alta|media|baja","monto_neto":"alta|media|baja","total":"alta|media|baja"}}
  
 Montos: enteros sin puntos/decimales. Ausentes: null.`;
  
@@ -145,4 +146,3 @@ export const config = {
     responseLimit: false,
   }
 };
- 
