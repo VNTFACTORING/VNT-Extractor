@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import Head from 'next/head';
 import Link from 'next/link';
 import JSZip from 'jszip';
+import { PDFDocument } from 'pdf-lib';
  
 export default function Home() {
   const [files, setFiles] = useState([]);
@@ -176,6 +177,114 @@ export default function Home() {
   function removeFile(i) {
     setFiles(prev => prev.filter((_, idx) => idx !== i));
     setResults([]); setStatuses({}); setMpData({});
+  }
+ 
+  // ── Genera PDF unificado con facturas y respaldos ordenados ──────────────
+  async function generarPDFRespaldos() {
+    const facturas = results.filter(r => r.ok && !r.data?.tipo_invalido && !r.duplicado);
+    if (!facturas.length) return;
+ 
+    // Normalización local igual que vincularRespaldos
+    function normCodLocal(s) {
+      return (s || '').trim().toUpperCase()
+        .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/[()]/g, '');
+    }
+ 
+    // Nombre del archivo — usar razón social del primer deudor
+    const razonSocial = (facturas[0]?.data?.razon_social_deudor || 'CLIENTE')
+      .toUpperCase().replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, '_').slice(0, 40);
+    const nombreArchivo = `FA_RESPALDOS_${razonSocial}.pdf`;
+ 
+    // Mapa de archivos originales por nombre
+    const archivosPorNombre = new Map();
+    files.forEach(f => archivosPorNombre.set(f.name, f));
+ 
+    // Construir orden de documentos:
+    // Facturas ordenadas por folio → cada una seguida de sus respaldos
+    // Respaldos sin factura al final ordenados por nombre
+    const respaldosUsados = new Set();
+    const orden = [];
+ 
+    const facturasOrdenadas = [...facturas].sort((a, b) => {
+      const fa = parseInt(a.data.numero_folio) || 0;
+      const fb = parseInt(b.data.numero_folio) || 0;
+      return fa - fb;
+    });
+ 
+    for (const r of facturasOrdenadas) {
+      orden.push({ filename: r.filename, tipo: 'factura' });
+      // Agregar respaldos vinculados ordenados por campo (OC → Pres → EDP → Cont → NP)
+      const camposOrden = ['ref_oc','ref_presupuesto','ref_edp','ref_contrato','ref_nota_pedido'];
+      for (const campo of camposOrden) {
+        if (r.respaldoPorCampo?.[campo]) {
+          // Buscar archivos de respaldo que corresponden a este campo específico
+          const refVal = normCodLocal(r.data[campo]);
+          results
+            .filter(rb => rb.ok && rb.data?.tipo_invalido && normCodLocal(rb.data?.codigo_respaldo) === refVal)
+            .forEach(rb => {
+              if (!respaldosUsados.has(rb.filename)) {
+                orden.push({ filename: rb.filename, tipo: 'respaldo' });
+                respaldosUsados.add(rb.filename);
+              }
+            });
+        }
+      }
+    }
+ 
+    // Respaldos sin factura vinculada al final, ordenados por nombre
+    const respaldosSinVincular = results
+      .filter(r => r.ok && r.data?.tipo_invalido && !respaldosUsados.has(r.filename))
+      .sort((a, b) => a.filename.localeCompare(b.filename));
+    respaldosSinVincular.forEach(r => orden.push({ filename: r.filename, tipo: 'respaldo' }));
+ 
+    // Crear PDF unificado
+    const pdfDoc = await PDFDocument.create();
+ 
+    for (const item of orden) {
+      const archivo = archivosPorNombre.get(item.filename);
+      if (!archivo) continue;
+ 
+      const ext = item.filename.toLowerCase().slice(item.filename.lastIndexOf('.'));
+      const bytes = await archivo.arrayBuffer();
+ 
+      try {
+        if (ext === '.pdf') {
+          // Embeber PDF directamente
+          const srcDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+          const paginas = await pdfDoc.copyPages(srcDoc, srcDoc.getPageIndices());
+          paginas.forEach(p => pdfDoc.addPage(p));
+        } else {
+          // Convertir imagen a página PDF — tamaño A4 para uniformidad y menor peso
+          const page = pdfDoc.addPage([595, 842]); // A4
+          let img;
+          if (ext === '.png') {
+            img = await pdfDoc.embedPng(bytes);
+          } else {
+            img = await pdfDoc.embedJpg(bytes);
+          }
+          const { width, height } = img.scaleToFit(575, 822);
+          page.drawImage(img, {
+            x: (595 - width) / 2,
+            y: (842 - height) / 2,
+            width,
+            height,
+          });
+        }
+      } catch {
+        // Si un archivo falla, continuar con el siguiente
+        continue;
+      }
+    }
+ 
+    // Descargar
+    const pdfBytes = await pdfDoc.save();
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nombreArchivo;
+    a.click();
+    URL.revokeObjectURL(url);
   }
  
   async function toB64(file) {
@@ -434,6 +543,8 @@ export default function Home() {
         .btn-exp-gve:disabled { opacity:.4; cursor:not-allowed; }
         .btn-exp-full { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#fff; color:#1A2B3C; font-size:13px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #DDE2EA; border-radius:8px; cursor:pointer; }
         .btn-exp-full:hover { background:#F2F4F7; }
+        .btn-exp-pdf { display:inline-flex; align-items:center; gap:6px; padding:9px 18px; background:#E1F5EE; color:#0A7055; font-size:13px; font-weight:600; font-family:'DM Sans',sans-serif; border:1px solid #0A7055; border-radius:8px; cursor:pointer; }
+        .btn-exp-pdf:hover { background:#0A7055; color:#fff; }
         .tbl-wrap { background:#fff; border:1px solid #DDE2EA; border-radius:14px; overflow:auto; }
         table { width:100%; border-collapse:collapse; min-width:1400px; }
         thead th { padding:10px 14px; text-align:left; font-size:10px; font-weight:700; color:#6B7A8D; text-transform:uppercase; letter-spacing:.07em; background:#F2F4F7; border-bottom:1px solid #DDE2EA; white-space:nowrap; }
@@ -622,6 +733,9 @@ export default function Home() {
                 <div className="export-btns">
                   <button className="btn-exp-gve" onClick={exportGVE} disabled={!diasValido}>⬇ Exportar GVE (Carga Masiva)</button>
                   <button className="btn-exp-full" onClick={exportCompleto}>⬇ Exportar completo + MP</button>
+                  {results.some(r => r.ok && !r.data?.tipo_invalido && !r.duplicado && r.tieneRespaldo) && (
+                    <button className="btn-exp-pdf" onClick={generarPDFRespaldos}>📄 Descargar respaldos ordenados</button>
+                  )}
                 </div>
               )}
             </div>
