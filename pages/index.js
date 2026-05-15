@@ -3,7 +3,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
- 
+
 export default function Home() {
   const [files, setFiles] = useState([]);
   const [results, setResults] = useState([]);
@@ -15,19 +15,19 @@ export default function Home() {
   const [mpData, setMpData] = useState({});
   const [over, setOver] = useState(false);
   const inputRef = useRef();
- 
+
   const [vencDias, setVencDias] = useState('30');
   const [vencBase, setVencBase] = useState('hoy');
- 
+
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
- 
+
   function normalizeRut(rut) {
     if (!rut) return rut;
     let r = String(rut).trim().replace(/\./g, '').toUpperCase();
     if (!r.includes('-') && r.length > 1) r = r.slice(0, -1) + '-' + r.slice(-1);
     return r;
   }
- 
+
   function calcularVencimiento(fechaEmision) {
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) return null;
@@ -46,22 +46,22 @@ export default function Home() {
     const y = base.getFullYear();
     return `${d}/${m}/${y}`;
   }
- 
+
   function getVencimiento(data) {
     const calculada = calcularVencimiento(data.fecha_emision);
     return calculada || data.fecha_vencimiento || data.fecha_emision || '';
   }
- 
+
   // ── Tipos de archivo permitidos ──────────────────────────────────────────
   const TIPOS_VALIDOS = ['application/pdf','image/png','image/jpeg','image/webp'];
   const EXT_VALIDAS   = ['.pdf','.png','.jpg','.jpeg','.webp'];
- 
+
   function esArchivoValido(nombre, tipo) {
     if (tipo && TIPOS_VALIDOS.includes(tipo)) return true;
     const ext = nombre.toLowerCase().slice(nombre.lastIndexOf('.'));
     return EXT_VALIDAS.includes(ext);
   }
- 
+
   // ── Descomprime un ZIP y retorna los archivos válidos como File objects ──
   async function expandirZip(zipFile) {
     const zip = await JSZip.loadAsync(zipFile);
@@ -86,7 +86,7 @@ export default function Home() {
     await Promise.all(promesas);
     return archivos;
   }
- 
+
   async function addFiles(newFiles) {
     const existing = new Set(files.map(f => f.name + f.size));
     let expandidos = [];
@@ -107,7 +107,7 @@ export default function Home() {
     setFiles(prev => [...prev, ...nuevos]);
     setResults([]); setStatuses({}); setMpData({});
   }
- 
+
   // ── Detecta duplicados en allResults (mismo folio + rut_deudor) ──────────
   function marcarDuplicados(allResults) {
     const vistos = new Map();
@@ -122,7 +122,7 @@ export default function Home() {
       return r;
     });
   }
- 
+
   // ── Vincula documentos de respaldo con sus facturas por codigo_respaldo ──
   function vincularRespaldos(allResults) {
     // Normaliza código para comparación — quita espacios extra y unifica separadores
@@ -132,9 +132,9 @@ export default function Home() {
         .replace(/-+/g, '-')    // múltiples guiones → uno
         .replace(/[()]/g, '');  // quitar paréntesis
     }
- 
+
     const respaldos = allResults.filter(r => r.ok && r.data?.tipo_invalido && r.data?.codigo_respaldo);
- 
+
     // Construir mapa de respaldos: codigo_normalizado → [filenames]
     const mapaRespaldos = new Map();
     respaldos.forEach(r => {
@@ -143,7 +143,7 @@ export default function Home() {
       if (!mapaRespaldos.has(cod)) mapaRespaldos.set(cod, []);
       mapaRespaldos.get(cod).push(r.filename);
     });
- 
+
     // Marcar cada factura si tiene respaldo vinculado
     return allResults.map(r => {
       if (!r.ok || r.data?.tipo_invalido) return r;
@@ -151,8 +151,9 @@ export default function Home() {
       const refEDP = normCod(r.data.ref_edp);
       const refPre = normCod(r.data.ref_presupuesto);
       const refCon = normCod(r.data.ref_contrato);
+      const refHES = normCod(r.data.ref_hes);
       const refNP  = normCod(r.data.ref_nota_pedido);
-      const refs   = [refOC, refEDP, refPre, refCon, refNP].filter(Boolean);
+      const refs   = [refOC, refEDP, refPre, refHES, refCon, refNP].filter(Boolean);
       const tieneRespaldo = refs.some(ref => mapaRespaldos.has(ref));
       const archivosRespaldo = refs.flatMap(ref => mapaRespaldos.get(ref) || []);
       // Mapa por campo para saber cuál referencia específica tiene respaldo
@@ -160,45 +161,46 @@ export default function Home() {
         ref_oc:          refOC  && mapaRespaldos.has(refOC),
         ref_edp:         refEDP && mapaRespaldos.has(refEDP),
         ref_presupuesto: refPre && mapaRespaldos.has(refPre),
+        ref_hes:         refHES && mapaRespaldos.has(refHES),
         ref_contrato:    refCon && mapaRespaldos.has(refCon),
         ref_nota_pedido: refNP  && mapaRespaldos.has(refNP),
       };
       return { ...r, tieneRespaldo, archivosRespaldo, respaldoPorCampo };
     });
   }
- 
+
   function clearAll() {
     setFiles([]); setResults([]); setStatuses({});
     setProgress({ current: 0, total: 0 });
     setProgressMP({ current: 0, total: 0 });
     setMpData({});
   }
- 
+
   function removeFile(i) {
     setFiles(prev => prev.filter((_, idx) => idx !== i));
     setResults([]); setStatuses({}); setMpData({});
   }
- 
+
   // ── Genera PDF unificado con facturas y respaldos ordenados ──────────────
   async function generarPDFRespaldos() {
     const facturas = results.filter(r => r.ok && !r.data?.tipo_invalido && !r.duplicado);
     if (!facturas.length) return;
- 
+
     // Normalización local igual que vincularRespaldos
     function normCodLocal(s) {
       return (s || '').trim().toUpperCase()
         .replace(/\s+/g, '-').replace(/-+/g, '-').replace(/[()]/g, '');
     }
- 
+
     // Nombre del archivo — usar razón social del primer deudor
     const razonSocial = (facturas[0]?.data?.razon_social_deudor || 'CLIENTE')
       .toUpperCase().replace(/[^A-Z0-9 ]/g, '').replace(/\s+/g, '_').slice(0, 40);
     const nombreArchivo = `FA_RESPALDOS_${razonSocial}.pdf`;
- 
+
     // Mapa de archivos originales por nombre
     const archivosPorNombre = new Map();
     files.forEach(f => archivosPorNombre.set(f.name, f));
- 
+
     // Construir orden de documentos:
     // Facturas ordenadas por folio → cada una seguida de sus respaldos
     // Respaldos sin factura al final ordenados por nombre
@@ -206,20 +208,20 @@ export default function Home() {
     results
       .filter(r => r.ok && r.data?.tipo_invalido)
       .forEach(r => respaldosSinVincular.add(r.filename));
- 
+
     const orden = [];
     const respaldosVinculados = new Set();
- 
+
     const facturasOrdenadas = [...facturas].sort((a, b) => {
       const fa = parseInt(a.data.numero_folio) || 0;
       const fb = parseInt(b.data.numero_folio) || 0;
       return fa - fb;
     });
- 
+
     for (const r of facturasOrdenadas) {
       orden.push({ filename: r.filename, tipo: 'factura' });
       // Agregar respaldos vinculados ordenados por campo (OC → Pres → EDP → Cont → NP)
-      const camposOrden = ['ref_oc','ref_presupuesto','ref_edp','ref_contrato','ref_nota_pedido'];
+      const camposOrden = ['ref_oc','ref_presupuesto','ref_edp','ref_hes','ref_contrato','ref_nota_pedido'];
       for (const campo of camposOrden) {
         if (r.respaldoPorCampo?.[campo]) {
           const refVal = normCodLocal(r.data[campo]);
@@ -233,23 +235,23 @@ export default function Home() {
         }
       }
     }
- 
+
     // Respaldos sin factura vinculada al final, ordenados por nombre
     const respaldosSinVincularFinal = results
       .filter(r => r.ok && r.data?.tipo_invalido && !respaldosVinculados.has(r.filename))
       .sort((a, b) => a.filename.localeCompare(b.filename));
     respaldosSinVincularFinal.forEach(r => orden.push({ filename: r.filename, tipo: 'respaldo' }));
- 
+
     // Crear PDF unificado
     const pdfDoc = await PDFDocument.create();
- 
+
     for (const item of orden) {
       const archivo = archivosPorNombre.get(item.filename);
       if (!archivo) continue;
- 
+
       const ext = item.filename.toLowerCase().slice(item.filename.lastIndexOf('.'));
       const bytes = await archivo.arrayBuffer();
- 
+
       try {
         if (ext === '.pdf') {
           // Embeber PDF directamente
@@ -278,7 +280,7 @@ export default function Home() {
         continue;
       }
     }
- 
+
     // Descargar
     const pdfBytes = await pdfDoc.save();
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
@@ -289,7 +291,7 @@ export default function Home() {
     a.click();
     URL.revokeObjectURL(url);
   }
- 
+
   async function toB64(file) {
     return new Promise((res, rej) => {
       const r = new FileReader();
@@ -298,7 +300,7 @@ export default function Home() {
       r.readAsDataURL(file);
     });
   }
- 
+
   async function consultarMP(rowIndex, rut_deudor, razon_social_deudor, ref_oc, ref_presupuesto, ref_edp, folio) {
     try {
       const res = await fetch('/api/mercadopublico', {
@@ -312,7 +314,7 @@ export default function Home() {
       setMpData(prev => ({ ...prev, [rowIndex]: { loading: false, error: e.message } }));
     }
   }
- 
+
   async function consultarMPTodas(allResults) {
     const okRows = allResults.map((r, i) => ({ r, i })).filter(({ r }) => r.ok);
     if (!okRows.length) return;
@@ -329,7 +331,7 @@ export default function Home() {
     }
     setProcessingMP(false);
   }
- 
+
   async function extract() {
     if (!files.length || processing) return;
     const dias = parseInt(vencDias, 10);
@@ -377,19 +379,19 @@ export default function Home() {
     // Solo consultar MP para facturas válidas, no respaldos
     await consultarMPTodas(resultadosFinal.filter(r => r.ok && !r.data.tipo_invalido && !r.duplicado));
   }
- 
+
   function fmt(v, money) {
     if (v === null || v === undefined) return '—';
     if (money) return '$\u00A0' + Number(v).toLocaleString('es-CL');
     return String(v);
   }
- 
+
   function toDateGVE(fecha) {
     if (!fecha) return '';
     if (fecha.includes('/')) { const [dd, mm, yyyy] = fecha.split('/'); return `${yyyy}-${mm}-${dd}`; }
     return fecha;
   }
- 
+
   function exportGVE() {
     const dias = parseInt(vencDias, 10);
     if (isNaN(dias) || dias <= 0) {
@@ -408,7 +410,7 @@ export default function Home() {
       .then(()=>alert('Copiado en formato GVE (Carga Masiva)'))
       .catch(()=>alert('No se pudo copiar automáticamente.'));
   }
- 
+
   function exportCompleto() {
     const ok = results
       .map((r, i) => ({ r, i }))
@@ -422,6 +424,7 @@ export default function Home() {
         d.ref_oc           ? `OC: ${d.ref_oc}`         : null,
         d.ref_presupuesto  ? `Pres: ${d.ref_presupuesto}` : null,
         d.ref_edp          ? `EDP: ${d.ref_edp}`        : null,
+        d.ref_hes          ? `HES: ${d.ref_hes}`        : null,
         d.ref_contrato     ? `Cont: ${d.ref_contrato}`  : null,
         d.ref_nota_pedido  ? `NP: ${d.ref_nota_pedido}` : null,
       ].filter(Boolean).join(' | ') || '—';
@@ -446,20 +449,20 @@ export default function Home() {
       .then(()=>alert('Copiado completo'))
       .catch(()=>alert('No se pudo copiar.'));
   }
- 
+
   const okResults = results.filter(r => r.ok && !r.duplicado && !r.data?.tipo_invalido);
   const totalNeto = okResults.reduce((s, r) => s + (r.data.monto_neto || 0), 0);
   const totalFinal = okResults.reduce((s, r) => s + (r.data.total || 0), 0);
   const mpDone = Object.values(mpData).filter(m => !m.loading).length;
   const mpTotal = Object.keys(mpData).length;
- 
+
   const statusLabel = { queue:'En cola', processing:'Procesando…', done:'✓ Listo', error:'Error' };
   const statusColor = { queue:'#6B7A8D', processing:'#1A6AB5', done:'#0A7055', error:'#C00000' };
   const statusBg   = { queue:'#F2F4F7', processing:'#E8F4FF', done:'#E1F5EE', error:'#FFF0F0' };
- 
+
   const diasValido = !isNaN(parseInt(vencDias, 10)) && parseInt(vencDias, 10) > 0;
   const baseLabel = vencBase === 'hoy' ? 'fecha de hoy' : 'fecha de emisión';
- 
+
   return (
     <>
       <Head>
@@ -591,7 +594,7 @@ export default function Home() {
         .footer a { color:#2AADB8; text-decoration:none; }
         @media(max-width:500px){ .summary{grid-template-columns:1fr;} .venc-body{flex-direction:column;align-items:flex-start;} }
       `}</style>
- 
+
       <div className="top">
         <div className="dots">
           <div className="dot dim"/><div className="dot"/><div className="dot dim"/>
@@ -603,11 +606,11 @@ export default function Home() {
         <Link href="/" className="nav-link active">Extractor</Link>
         <Link href="/contactos" className="nav-link">Contactos MP</Link>
       </div>
- 
+
       <div className="page">
         <input ref={inputRef} type="file" accept=".pdf,.zip,image/png,image/jpeg,image/webp" multiple style={{display:'none'}}
           onChange={e => { addFiles(e.target.files); e.target.value=''; }} />
- 
+
         <div className="venc-panel">
           <div className="venc-header">
             <span className="venc-title">📅 Fecha de vencimiento</span>
@@ -647,7 +650,7 @@ export default function Home() {
             )}
           </div>
         </div>
- 
+
         <div className={`drop${files.length?' has':''}${over?' over':''}`}
           onClick={() => inputRef.current.click()}
           onDragOver={e => { e.preventDefault(); setOver(true); }}
@@ -658,7 +661,7 @@ export default function Home() {
           <div className="drop-sub">{files.length ? 'Clic para agregar más archivos' : 'Puedes subir varias a la vez · PDF o imagen'}</div>
           <div className="fmts"><span className="fmt">PDF</span><span className="fmt">PNG / JPG</span><span className="fmt">ZIP</span><span className="fmt">Múltiples archivos</span></div>
         </div>
- 
+
         {files.length > 0 && (
           <div className="queue-list">
             {files.map((f, i) => (
@@ -681,7 +684,7 @@ export default function Home() {
             ))}
           </div>
         )}
- 
+
         {files.length > 0 && (
           <div className="actions">
             <button className="btn-main" onClick={extract} disabled={processing || processingMP}>
@@ -694,7 +697,7 @@ export default function Home() {
             {!processing && !processingMP && <button className="btn-sec" onClick={clearAll}>Limpiar</button>}
           </div>
         )}
- 
+
         {processing && (
           <div className="prog">
             <div className="prog-label">
@@ -704,7 +707,7 @@ export default function Home() {
             <div className="prog-bar"><div className="prog-fill extract" style={{width:`${(progress.current/progress.total)*100}%`}}/></div>
           </div>
         )}
- 
+
         {processingMP && (
           <div className="prog">
             <div className="prog-label">
@@ -714,13 +717,13 @@ export default function Home() {
             <div className="prog-bar"><div className="prog-fill mp" style={{width:`${(progressMP.current/progressMP.total)*100}%`}}/></div>
           </div>
         )}
- 
+
         {!processingMP && mpTotal > 0 && !processing && (
           <div style={{fontSize:12, color:'#5B2ED8', marginBottom:'.75rem', display:'flex', alignItems:'center', gap:6}}>
             ✓ Mercado Público: {mpDone}/{mpTotal} consultadas
           </div>
         )}
- 
+
         {results.length > 0 && (
           <>
             {okResults.length > 0 && (
@@ -786,6 +789,7 @@ export default function Home() {
                               { campo: 'ref_oc',          label: 'OC',   val: r.data.ref_oc },
                               { campo: 'ref_presupuesto', label: 'Pres', val: r.data.ref_presupuesto },
                               { campo: 'ref_edp',         label: 'EDP',  val: r.data.ref_edp },
+                              { campo: 'ref_hes',         label: 'HES',  val: r.data.ref_hes },
                               { campo: 'ref_contrato',    label: 'Cont', val: r.data.ref_contrato },
                               { campo: 'ref_nota_pedido', label: 'NP',   val: r.data.ref_nota_pedido },
                             ].filter(x => x.val);
@@ -877,7 +881,7 @@ export default function Home() {
             </div>
           </>
         )}
- 
+
         <div className="footer"><a href="https://www.vantrustcapital.cl" target="_blank">vantrustcapital.cl</a></div>
       </div>
     </>
