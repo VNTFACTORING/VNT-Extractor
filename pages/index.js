@@ -202,8 +202,13 @@ export default function Home() {
     // Construir orden de documentos:
     // Facturas ordenadas por folio → cada una seguida de sus respaldos
     // Respaldos sin factura al final ordenados por nombre
-    const respaldosUsados = new Set();
+    const respaldosSinVincular = new Set();
+    results
+      .filter(r => r.ok && r.data?.tipo_invalido)
+      .forEach(r => respaldosSinVincular.add(r.filename));
+ 
     const orden = [];
+    const respaldosVinculados = new Set();
  
     const facturasOrdenadas = [...facturas].sort((a, b) => {
       const fa = parseInt(a.data.numero_folio) || 0;
@@ -217,25 +222,23 @@ export default function Home() {
       const camposOrden = ['ref_oc','ref_presupuesto','ref_edp','ref_contrato','ref_nota_pedido'];
       for (const campo of camposOrden) {
         if (r.respaldoPorCampo?.[campo]) {
-          // Buscar archivos de respaldo que corresponden a este campo específico
           const refVal = normCodLocal(r.data[campo]);
           results
             .filter(rb => rb.ok && rb.data?.tipo_invalido && normCodLocal(rb.data?.codigo_respaldo) === refVal)
             .forEach(rb => {
-              if (!respaldosUsados.has(rb.filename)) {
-                orden.push({ filename: rb.filename, tipo: 'respaldo' });
-                respaldosUsados.add(rb.filename);
-              }
+              // Permitir repetición — una OC puede vincularse a múltiples facturas
+              orden.push({ filename: rb.filename, tipo: 'respaldo' });
+              respaldosVinculados.add(rb.filename);
             });
         }
       }
     }
  
     // Respaldos sin factura vinculada al final, ordenados por nombre
-    const respaldosSinVincular = results
-      .filter(r => r.ok && r.data?.tipo_invalido && !respaldosUsados.has(r.filename))
+    const respaldosSinVincularFinal = results
+      .filter(r => r.ok && r.data?.tipo_invalido && !respaldosVinculados.has(r.filename))
       .sort((a, b) => a.filename.localeCompare(b.filename));
-    respaldosSinVincular.forEach(r => orden.push({ filename: r.filename, tipo: 'respaldo' }));
+    respaldosSinVincularFinal.forEach(r => orden.push({ filename: r.filename, tipo: 'respaldo' }));
  
     // Crear PDF unificado
     const pdfDoc = await PDFDocument.create();
@@ -880,4 +883,3 @@ export default function Home() {
     </>
   );
 }
- 
